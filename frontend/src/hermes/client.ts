@@ -14,7 +14,11 @@ export function normalizeBaseUrl(input: string, allowInsecure = false): string {
 
 export class HermesClient {
   readonly baseUrl: string;
-  constructor(private readonly profile: HermesConnectionProfile, private readonly fetcher: typeof fetch = fetch) { this.baseUrl = normalizeBaseUrl(profile.baseUrl, profile.allowInsecure); }
+  private readonly fetcher: typeof fetch;
+  constructor(private readonly profile: HermesConnectionProfile, fetcher: typeof fetch = globalThis.fetch) {
+    this.baseUrl = normalizeBaseUrl(profile.baseUrl, profile.allowInsecure);
+    this.fetcher = fetcher.bind(globalThis);
+  }
   async request<T>(path: string, init: RequestInit = {}, timeoutMs = 30000): Promise<T> {
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs);
     const headers = new Headers(init.headers); headers.set('Authorization', `Bearer ${this.profile.apiKey}`); headers.set('Accept', 'application/json');
