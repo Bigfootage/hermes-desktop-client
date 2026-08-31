@@ -2,7 +2,12 @@ export interface SseEvent { event: string; data: string; id?: string; retry?: nu
 export class SseParser {
   private buffer = '';
   push(chunk: string, flush = false): SseEvent[] {
-    this.buffer += chunk.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    this.buffer += chunk;
+    // Normalize only after joining chunks. CRLF can be split exactly between
+    // network reads; normalizing each read separately creates false frames.
+    this.buffer = this.buffer.replace(/\r\n/g, '\n');
+    if (flush) this.buffer = this.buffer.replace(/\r/g, '\n');
+    else this.buffer = this.buffer.replace(/\r(?!$)/g, '\n');
     const events: SseEvent[] = [];
     let boundary: number;
     while ((boundary = this.buffer.indexOf('\n\n')) >= 0) { const frame = this.buffer.slice(0, boundary); this.buffer = this.buffer.slice(boundary + 2); const parsed = this.parse(frame); if (parsed) events.push(parsed); }
