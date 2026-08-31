@@ -1,0 +1,7 @@
+import { HermesClient } from './client'; import { parseSse } from './sse'; import type { HermesResponse, HermesResponseOutputItem } from './types';
+export type ResponseStreamEvent = { type: string; delta?: string; response?: HermesResponse; item?: HermesResponseOutputItem; error?: unknown; raw: Record<string, unknown> };
+export async function* streamResponse(client: HermesClient, input: string, options: { previousResponseId?: string; conversation?: string; signal?: AbortSignal } = {}): AsyncGenerator<ResponseStreamEvent> {
+  const body: Record<string, unknown> = { input, stream: true }; if (options.previousResponseId) body.previous_response_id = options.previousResponseId; if (options.conversation) body.conversation = options.conversation;
+  const response = await client.stream('/v1/responses', { method: 'POST', body: JSON.stringify(body), signal: options.signal }); const seen = new Set<string>();
+  for await (const frame of parseSse(response, options.signal)) { if (frame.data === '[DONE]') return; let raw: Record<string, unknown>; try { raw = JSON.parse(frame.data); } catch { continue; } const type = typeof raw.type === 'string' ? raw.type : frame.event; const dedupe = frame.id ?? (typeof raw.event_id === 'string' ? raw.event_id : undefined); if (dedupe && seen.has(dedupe)) continue; if (dedupe) seen.add(dedupe); yield { type, delta: typeof raw.delta === 'string' ? raw.delta : undefined, response: raw.response as HermesResponse | undefined, item: (raw.item ?? raw.output_item) as HermesResponseOutputItem | undefined, error: raw.error, raw }; }
+}
