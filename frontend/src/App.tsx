@@ -19,8 +19,8 @@ import { UpdateChecker } from './components/Desktop/UpdateChecker';
 import { track, hashId } from './lib/analytics';
 
 export default function App() {
-  if (window.location.pathname === '/hermes') return <HermesChatPage />;
-  return <LegacyApp />;
+  if (window.location.pathname === '/legacy') return <LegacyApp />;
+  return <HermesChatPage />;
 }
 
 function LegacyApp() {

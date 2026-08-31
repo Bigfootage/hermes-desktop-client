@@ -27,7 +27,7 @@ applyTheme();
 // Fetch the API base URL from the Tauri backend before rendering.
 // This ensures JARVIS_PORT is defined in one place (the Rust backend).
 // In non-Tauri environments this is a no-op.
-const hermesMode = window.location.pathname === '/hermes';
+const hermesMode = window.location.pathname !== '/legacy';
 (hermesMode ? Promise.resolve() : initApiBase()).finally(() => {
   // Hermes mode does not initialize the legacy analytics/runtime facade.
   if (!hermesMode) void initAnalytics();
