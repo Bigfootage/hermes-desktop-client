@@ -15,9 +15,13 @@ export function normalizeBaseUrl(input: string, allowInsecure = false): string {
 export class HermesClient {
   readonly baseUrl: string;
   private readonly fetcher: typeof fetch;
-  constructor(private readonly profile: HermesConnectionProfile, fetcher: typeof fetch = globalThis.fetch) {
+  constructor(private readonly profile: HermesConnectionProfile, fetcher?: typeof fetch) {
     this.baseUrl = normalizeBaseUrl(profile.baseUrl, profile.allowInsecure);
-    this.fetcher = fetcher.bind(globalThis);
+    // WebView2's native fetch can reject extracted/bound calls with
+    // "Illegal invocation". Preserve the Window property call instead.
+    this.fetcher = fetcher
+      ? ((input, init) => fetcher.call(globalThis, input, init)) as typeof fetch
+      : ((input, init) => globalThis.fetch(input, init)) as typeof fetch;
   }
   async request<T>(path: string, init: RequestInit = {}, timeoutMs = 30000): Promise<T> {
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs);
