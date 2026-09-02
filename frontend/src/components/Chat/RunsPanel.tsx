@@ -1,8 +1,8 @@
 import { FormEvent, useState } from 'react';
-import { Activity, CircleAlert, Link, Send, Square, X } from 'lucide-react';
+import { Activity, CircleAlert, Link, Send, Shield, ShieldAlert, Square, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { isRunSteerable, isRunStoppable } from '../../hermes/run-state';
-import type { HermesConnectionProfile } from '../../hermes/types';
+import type { HermesApprovalChoice, HermesConnectionProfile } from '../../hermes/types';
 import { useHermesRun } from '../../hermes/useHermesRun';
 import { ResponseActivityTimeline } from './ResponseActivityTimeline';
 
@@ -11,6 +11,7 @@ export function RunsPanel({ profile, onClose }: { profile: HermesConnectionProfi
   const [prompt, setPrompt] = useState('');
   const [attachId, setAttachId] = useState('');
   const [steer, setSteer] = useState('');
+  const [approving, setApproving] = useState(false);
   const submitRun = (event: FormEvent) => { event.preventDefault(); if (!prompt.trim()) return; void vm.launch(prompt); setPrompt(''); };
   const submitAttach = (event: FormEvent) => { event.preventDefault(); void vm.attach(attachId); };
   const submitSteer = (event: FormEvent) => { event.preventDefault(); if (!steer.trim()) return; void vm.steer(steer); setSteer(''); };
@@ -18,6 +19,14 @@ export function RunsPanel({ profile, onClose }: { profile: HermesConnectionProfi
     ...vm.run.activity,
     items: vm.run.activity.items.map((item) => item.detail?.trim() === vm.run?.output.trim() ? { ...item, detail: undefined } : item),
   } : null;
+
+  const handleApprove = async (choice: HermesApprovalChoice, all?: boolean) => {
+    setApproving(true);
+    await vm.resolveApproval(choice, all);
+    setApproving(false);
+  };
+
+  const approval = vm.approvalRequest;
 
   return <aside aria-label="Long-running tasks" className="relative z-10 flex w-[360px] shrink-0 flex-col border-l" style={{ borderColor: 'var(--color-border)', background: 'var(--color-sidebar)' }}>
     <header className="flex h-14 items-center gap-2 border-b px-4" style={{ borderColor: 'var(--color-border)' }}><Activity size={16} style={{ color: 'var(--color-accent)' }} /><h2 className="flex-1 text-sm font-semibold">Long task</h2><button aria-label="Close long task panel" onClick={onClose} className="cursor-pointer rounded-lg p-1.5"><X size={16} /></button></header>
@@ -29,9 +38,32 @@ export function RunsPanel({ profile, onClose }: { profile: HermesConnectionProfi
         <form onSubmit={submitAttach} className="flex gap-2"><input aria-label="Run ID" value={attachId} onChange={(event) => setAttachId(event.target.value)} placeholder="run_…" className="min-w-0 flex-1 rounded-lg border bg-transparent px-3 py-2 text-xs outline-none" style={{ borderColor: 'var(--color-input-border)' }} /><button disabled={vm.busy || !attachId.trim()} aria-label="Attach to run" className="cursor-pointer rounded-lg border px-3 disabled:opacity-40" style={{ borderColor: 'var(--color-border)' }}><Link size={14} /></button></form>
       </> : <>
         <section className="rounded-xl border p-3" style={{ borderColor: 'var(--color-border)', background: 'var(--color-bg-secondary)' }}>
-          <div className="flex items-center gap-2"><span className={`h-2 w-2 rounded-full ${!['completed','failed','cancelled'].includes(vm.run.status) ? 'animate-pulse' : ''}`} style={{ background: vm.run.status === 'completed' ? 'var(--color-success)' : vm.run.status === 'failed' || vm.run.status === 'cancelled' ? 'var(--color-error)' : 'var(--color-accent)' }} /><strong className="text-xs capitalize">{vm.run.status.replace(/_/g, ' ')}</strong><span className="ml-auto text-[10px]" style={{ color: 'var(--color-text-tertiary)' }}>{vm.run.connected ? 'Connected' : 'Reconnecting…'}</span></div>
+          <div className="flex items-center gap-2"><span className={`h-2 w-2 rounded-full ${!['completed','failed','cancelled','waiting_for_approval'].includes(vm.run.status) ? 'animate-pulse' : ''}`} style={{ background: vm.run.status === 'completed' ? 'var(--color-success)' : vm.run.status === 'failed' || vm.run.status === 'cancelled' ? 'var(--color-error)' : vm.run.status === 'waiting_for_approval' ? 'var(--color-warning)' : 'var(--color-accent)' }} /><strong className="text-xs capitalize">{vm.run.status.replace(/_/g, ' ')}</strong><span className="ml-auto text-[10px]" style={{ color: 'var(--color-text-tertiary)' }}>{vm.run.connected ? 'Connected' : 'Reconnecting…'}</span></div>
           <button onClick={() => navigator.clipboard.writeText(vm.run!.id)} title="Copy run ID" className="mt-2 max-w-full cursor-pointer truncate font-mono text-[10px]" style={{ color: 'var(--color-text-tertiary)' }}>{vm.run.id}</button>
         </section>
+
+        {approval && (
+          <section className="rounded-xl border p-3 space-y-3" style={{ borderColor: 'var(--color-warning)', background: 'color-mix(in srgb, var(--color-warning) 6%, transparent)' }} aria-label="Approval required">
+            <div className="flex items-start gap-2">
+              <ShieldAlert size={15} className="mt-0.5 shrink-0" style={{ color: 'var(--color-warning)' }} />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold">Approval required</p>
+                {approval.tool && <p className="mt-1 text-[11px]" style={{ color: 'var(--color-text-secondary)' }}><span className="font-mono" style={{ color: 'var(--color-accent)' }}>{approval.tool}</span></p>}
+                {approval.command && <p className="mt-1 break-all font-mono text-[10px] rounded-md px-1.5 py-1" style={{ background: 'var(--color-bg)', color: 'var(--color-text-secondary)' }}>{approval.command}</p>}
+                {approval.description && <p className="mt-1 text-[10px]" style={{ color: 'var(--color-text-tertiary)' }}>{approval.description}</p>}
+              </div>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <button disabled={approving} onClick={() => handleApprove('once')} className="flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium disabled:opacity-40" style={{ background: 'var(--color-success)', color: 'var(--color-on-accent)' }}><Shield size={12} />Approve once</button>
+              <div className="flex gap-1.5">
+                <button disabled={approving} onClick={() => handleApprove('session')} className="flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-lg px-2 py-1.5 text-[10px] font-medium disabled:opacity-40" style={{ background: 'var(--color-accent)', color: 'var(--color-on-accent)' }}>Approve session</button>
+                <button disabled={approving} onClick={() => handleApprove('always')} className="flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-lg px-2 py-1.5 text-[10px] font-medium disabled:opacity-40" style={{ background: 'var(--color-accent)', color: 'var(--color-on-accent)' }}>Approve always</button>
+              </div>
+              <button disabled={approving} onClick={() => handleApprove('deny')} className="flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium disabled:opacity-40" style={{ background: 'var(--color-error)', color: 'var(--color-on-accent)' }}>Deny</button>
+            </div>
+          </section>
+        )}
+
         {displayActivity && <ResponseActivityTimeline activity={displayActivity} />}
         {vm.run.output && <div className="prose max-w-none text-sm"><ReactMarkdown>{vm.run.output}</ReactMarkdown></div>}
         {vm.run.pendingSteer && <div className="rounded-lg p-3 text-xs" style={{ background: 'var(--color-accent-subtle)' }}><strong>Guidance arrived after completion</strong><p className="mt-1 whitespace-pre-wrap">{vm.run.pendingSteer}</p><p className="mt-1" style={{ color: 'var(--color-text-tertiary)' }}>Copy this into a new run to continue.</p></div>}

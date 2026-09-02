@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { HermesClient } from './client';
 import { applyRunEvent, createRunView, isRunTerminal, reconcileRun, type RunView } from './run-state';
 import { HermesRunsClient } from './runs';
-import type { HermesConnectionProfile, HermesRun } from './types';
+import type { HermesApprovalChoice, HermesApprovalDetail, HermesConnectionProfile, HermesRun } from './types';
 
 const storageKey = (profile: HermesConnectionProfile) => `hermes.desktop.active-run:${profile.baseUrl}`;
 
@@ -10,10 +10,12 @@ export interface UseHermesRun {
   run: RunView | null;
   busy: boolean;
   error: string;
+  approvalRequest: HermesApprovalDetail | null;
   launch(input: string): Promise<void>;
   attach(id: string): Promise<void>;
   stop(): Promise<void>;
   steer(input: string): Promise<void>;
+  resolveApproval(choice: HermesApprovalChoice, all?: boolean): Promise<void>;
   clear(): void;
 }
 
@@ -22,14 +24,16 @@ export function useHermesRun(profile: HermesConnectionProfile): UseHermesRun {
   const [run, setRun] = useState<RunView | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [approvalRequest, setApprovalRequest] = useState<HermesApprovalDetail | null>(null);
   const abortRef = useRef<AbortController | undefined>(undefined);
 
   const observe = useCallback(async (initial: HermesRun) => {
     abortRef.current?.abort();
     const controller = new AbortController(); abortRef.current = controller;
     setRun((current) => current?.id === initial.id ? reconcileRun(current, initial) : createRunView(initial));
+    setApprovalRequest(isApprovalPending(initial) ? extractApproval(initial) : null);
     localStorage.setItem(storageKey(profile), initial.id);
-    if (isRunTerminal(initial.status)) return;
+    if (isRunTerminal(initial.status) && !isApprovalPending(initial)) return;
     try {
       for await (const event of api.events(initial.id, controller.signal)) setRun((current) => current && current.id === initial.id ? applyRunEvent(current, event) : current);
     } catch (caught) {
@@ -42,8 +46,9 @@ export function useHermesRun(profile: HermesConnectionProfile): UseHermesRun {
       try {
         const status = await api.get(initial.id);
         setRun((current) => current && current.id === initial.id ? reconcileRun(current, status) : current);
+        setApprovalRequest(isApprovalPending(status) ? extractApproval(status) : null);
         setError('');
-        if (isRunTerminal(status.status)) return;
+        if (isRunTerminal(status.status) && !isApprovalPending(status)) return;
       } catch (caught) {
         setRun((current) => current && current.id === initial.id ? { ...current, connected: false } : current);
         setError(caught instanceof Error ? caught.message : String(caught));
@@ -88,6 +93,26 @@ export function useHermesRun(profile: HermesConnectionProfile): UseHermesRun {
     finally { setBusy(false); }
   }, [api, run]);
 
-  const clear = useCallback(() => { abortRef.current?.abort(); localStorage.removeItem(storageKey(profile)); setRun(null); setError(''); }, [profile]);
-  return { run, busy, error, launch, attach, stop, steer, clear };
+  const resolveApproval = useCallback(async (choice: HermesApprovalChoice, all?: boolean) => {
+    if (!run) return; setBusy(true); setError('');
+    try {
+      const next = await api.approve(run.id, choice, all);
+      setRun((current) => current ? reconcileRun(current, { ...next, id: run.id }) : current);
+      setApprovalRequest(null);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : String(caught)); }
+    finally { setBusy(false); }
+  }, [api, run]);
+
+  const clear = useCallback(() => { abortRef.current?.abort(); localStorage.removeItem(storageKey(profile)); setRun(null); setError(''); setApprovalRequest(null); }, [profile]);
+  return { run, busy, error, approvalRequest, launch, attach, stop, steer, resolveApproval, clear };
+}
+
+function isApprovalPending(run: HermesRun): boolean {
+  return run.status === 'waiting_for_approval' && run.approval !== undefined;
+}
+
+function extractApproval(run: HermesRun): HermesApprovalDetail | null {
+  if (!run.approval) return null;
+  const a = run.approval;
+  return { id: typeof a.id === 'string' ? a.id : '', tool: typeof a.tool === 'string' ? a.tool : undefined, command: typeof a.command === 'string' ? a.command : undefined, args: typeof a.args === 'string' ? a.args : undefined, description: typeof a.description === 'string' ? a.description : undefined };
 }

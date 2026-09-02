@@ -1,5 +1,5 @@
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Bot, Cable, ChevronLeft, CircleAlert, Copy, Menu, MessageSquarePlus, PanelLeftClose, Pencil, Send, Square, Trash2, Unplug, User } from 'lucide-react';
+import { Activity, Bot, Cable, ChevronLeft, CircleAlert, Copy, Eye, EyeOff, HelpCircle, Key, Menu, MessageSquarePlus, PanelLeftClose, Pencil, Send, Square, Trash2, Unplug, User } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { ResponseActivityTimeline } from '../components/Chat/ResponseActivityTimeline';
 import { ConnectionStatus, VoiceCapture } from '../components/Chat/ConnectionStatus';
@@ -9,7 +9,7 @@ import { clearConnection, isTauriRuntime, loadConnection, saveConnection, valida
 import { HermesClient } from '../hermes/client';
 import { supportsResponses } from '../hermes/capabilities';
 import { createSession, deleteSession, forkSession, getSessionMessages, listSessions, patchSession, streamSessionChat, type HermesSession, type SessionStreamEvent } from '../hermes/sessions';
-import type { HermesCapabilities, HermesConnectionProfile } from '../hermes/types';
+import type { HermesCapabilities, HermesConnectionProfile, HermesClarifyRequest } from '../hermes/types';
 
 type Message = { id: string; role: 'user' | 'assistant'; text: string; activity?: ResponseActivity };
 type ConnectionState = 'checking' | 'connected' | 'streaming' | 'error';
@@ -53,6 +53,9 @@ export function HermesChatPage() {
   const [sessions, setSessions] = useState<HermesSession[]>([]);
   const [activeSession, setActiveSession] = useState<HermesSession | null>(null);
   const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [pendingClarify, setPendingClarify] = useState<HermesClarifyRequest | null>(null);
+  const [secretValue, setSecretValue] = useState('');
+  const [secretVisible, setSecretVisible] = useState(false);
   const previousId = useRef<string | undefined>(undefined);
   const abort = useRef<AbortController | undefined>(undefined);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -109,7 +112,7 @@ export function HermesChatPage() {
     if (streaming) abort.current?.abort();
     try {
       const session = await createSession(client, { source: 'desktop' });
-      setSessions((current) => [session, ...current]); setActiveSession(session); setMessages([]); setInput(''); setError(''); previousId.current = undefined;
+      setSessions((current) => [session, ...current]); setActiveSession(session); setMessages([]); setInput(''); setError(''); setPendingClarify(null); setSecretValue(''); previousId.current = undefined;
     } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
   }
 
@@ -166,6 +169,7 @@ export function HermesChatPage() {
     if (!client || !text || streaming || connectionState !== 'connected') return;
     const assistantId = crypto.randomUUID();
     setInput('');
+    setPendingClarify(null); setSecretValue('');
     setMessages((current) => [...current, { id: crypto.randomUUID(), role: 'user', text }, { id: assistantId, role: 'assistant', text: '', activity: createResponseActivity() }]);
     setStreaming(true); setConnectionState('streaming'); setError('');
     const controller = new AbortController(); abort.current = controller;
@@ -182,6 +186,9 @@ export function HermesChatPage() {
           activity: applySessionActivity(message.activity ?? createResponseActivity(), event),
         } : message));
         if (event.type === 'error') throw new Error(event.message || 'Hermes response failed');
+        if (event.type === 'tool.started' && (event.toolName === 'clarify' || event.toolName === 'secret-input')) {
+          setPendingClarify({ question: event.toolInput ?? 'Hermes needs more information', inputType: event.toolName === 'secret-input' ? 'secret' : 'text' });
+        }
       }
       void refreshSessions(session.id);
     } catch (err) {
@@ -207,6 +214,16 @@ export function HermesChatPage() {
 
   const statusLabel = connectionState === 'checking' ? 'Checking connection' : connectionState === 'streaming' ? 'Hermes is working' : connectionState === 'error' ? 'Connection issue' : 'Connected';
   const canSend = input.trim().length > 0 && !streaming && connectionState === 'connected';
+  const isSecret = pendingClarify?.inputType === 'secret';
+  const canSubmitSecret = isSecret && secretValue.trim().length > 0 && !streaming;
+
+  const submitSecretAnswer = () => {
+    if (!canSubmitSecret) return;
+    setInput(secretValue);
+    setSecretValue('');
+    const form = document.querySelector('form[aria-label="Chat form"]') as HTMLFormElement | null;
+    form?.requestSubmit();
+  };
 
   return (
     <main className="relative flex h-full w-full overflow-hidden" style={{ background: 'var(--color-bg)' }}>
@@ -243,9 +260,28 @@ export function HermesChatPage() {
         </div>
 
         <div className="shrink-0 px-4 pb-4 pt-2">
+          {pendingClarify && (
+            <div className="mx-auto mb-3 max-w-3xl rounded-xl border p-3" style={{ borderColor: isSecret ? 'var(--color-warning)' : 'var(--color-accent)', background: isSecret ? 'color-mix(in srgb, var(--color-warning) 6%, transparent)' : 'color-mix(in srgb, var(--color-accent) 6%, transparent)' }} aria-label={isSecret ? 'Secret input required' : 'Clarification needed'}>
+              <div className="flex items-start gap-2">
+                {isSecret ? <Key size={14} className="mt-0.5 shrink-0" style={{ color: 'var(--color-warning)' }} /> : <HelpCircle size={14} className="mt-0.5 shrink-0" style={{ color: 'var(--color-accent)' }} />}
+                <p className="text-xs font-medium" style={{ color: 'var(--color-text)' }}>{pendingClarify.question}</p>
+              </div>
+              {isSecret ? (
+                <div className="mt-2 flex gap-2">
+                  <div className="relative flex-1">
+                    <input type={secretVisible ? 'text' : 'password'} value={secretValue} onChange={(e) => setSecretValue(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submitSecretAnswer(); } }} placeholder="Enter secret value…" className="w-full rounded-lg border bg-transparent py-1.5 pl-2.5 pr-8 text-xs outline-none" style={{ borderColor: 'var(--color-input-border)' }} autoComplete="off" />
+                    <button type="button" onClick={() => setSecretVisible((v) => !v)} className="absolute right-1.5 top-1/2 -translate-y-1/2 cursor-pointer rounded p-0.5" aria-label={secretVisible ? 'Hide secret' : 'Show secret'}>{secretVisible ? <EyeOff size={13} /> : <Eye size={13} />}</button>
+                  </div>
+                  <button disabled={!canSubmitSecret} onClick={submitSecretAnswer} aria-label="Submit secret" className="cursor-pointer rounded-lg px-3 py-1.5 text-xs font-medium disabled:opacity-40" style={{ background: 'var(--color-accent)', color: 'var(--color-on-accent)' }}><Send size={13} /></button>
+                </div>
+              ) : (
+                <p className="mt-1.5 text-[10px]" style={{ color: 'var(--color-text-tertiary)' }}>Type your answer below and press Send.</p>
+              )}
+            </div>
+          )}
           {error && <div role="alert" className="mx-auto mb-2 flex max-w-3xl items-start gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: 'color-mix(in srgb, var(--color-error) 9%, transparent)', color: 'var(--color-error)' }}><CircleAlert size={14} className="mt-0.5 shrink-0" /><span className="flex-1">{error}</span>{connectionState === 'error' && <button onClick={disconnect} className="shrink-0 underline cursor-pointer">Reconnect</button>}</div>}
-          <form onSubmit={send} className="mx-auto max-w-3xl rounded-2xl border p-2 shadow-sm" style={{ borderColor: 'var(--color-input-border)', background: 'var(--color-input-bg)' }}>
-            <textarea aria-label="Message Hermes" rows={2} placeholder={connectionState === 'checking' ? 'Checking Hermes…' : 'Message Hermes…'} className="block max-h-40 min-h-12 w-full resize-none bg-transparent px-2 py-1.5 text-sm outline-none" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={onComposerKeyDown} disabled={connectionState === 'checking'} />
+          <form onSubmit={send} className="mx-auto max-w-3xl rounded-2xl border p-2 shadow-sm" style={{ borderColor: 'var(--color-input-border)', background: 'var(--color-input-bg)' }} aria-label="Chat form">
+            <textarea aria-label="Message Hermes" rows={2} placeholder={connectionState === 'checking' ? 'Checking Hermes…' : pendingClarify && !isSecret ? 'Answer the question…' : 'Message Hermes…'} className="block max-h-40 min-h-12 w-full resize-none bg-transparent px-2 py-1.5 text-sm outline-none" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={onComposerKeyDown} disabled={connectionState === 'checking'} />
             <div className="flex items-center justify-between px-1">
               <div className="flex items-center gap-1">
                 <VoiceCapture profile={profile} disabled={!canSend} onTranscript={(text) => setInput((current) => `${current}${current ? ' ' : ''}${text}`)} />

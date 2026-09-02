@@ -43,4 +43,20 @@ describe('run lifecycle view model', () => {
     expect(state.status).toBe('stopping');
     expect(state.activity.status).toBe('running');
   });
+
+  it('captures waiting_for_approval status with approval details', () => {
+    const state = createRunView({
+      id: 'run_1', status: 'waiting_for_approval',
+      approval: { id: 'approval_1', tool: 'terminal', command: 'rm -rf /tmp/cache', description: 'Clean up cache' },
+    });
+    expect(state.status).toBe('waiting_for_approval');
+    expect(state.activity.status).toBe('running');
+  });
+
+  it('resolves stop and steer controls when waiting for approval', () => {
+    const stopped = reconcileRun(createRunView({ id: 'run_1', status: 'waiting_for_approval' }), { id: 'run_1', status: 'stopping' });
+    expect(stopped.status).toBe('stopping');
+    let steered = applyRunEvent(createRunView({ id: 'run_1', status: 'waiting_for_approval' }), event('run.steered', { accepted: true }));
+    expect(steered.lastSteerAccepted).toBe(true);
+  });
 });

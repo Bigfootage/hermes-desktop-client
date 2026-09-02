@@ -29,7 +29,7 @@ export interface SessionMessage {
 
 export interface SessionList { data: HermesSession[]; limit: number; offset: number; hasMore: boolean }
 export interface SessionMessages { sessionId: string; data: SessionMessage[]; pagination?: { limit: number; offset: number; order: string; returned: number } }
-export interface SessionStreamEvent { type: string; delta?: string; content?: string; message?: string; messageId?: string; toolName?: string; preview?: string; raw?: Record<string, unknown> }
+export interface SessionStreamEvent { type: string; delta?: string; content?: string; message?: string; messageId?: string; toolName?: string; toolInput?: string; preview?: string; raw?: Record<string, unknown> }
 
 function idPath(id: string): string { return encodeURIComponent(id); }
 function sessionFrom(body: { session: HermesSession }): HermesSession { return normalizeSession(body.session); }
@@ -89,6 +89,7 @@ export async function* streamSessionChat(client: HermesClient, id: string, messa
     if (typeof raw.message === 'string') event.message = raw.message;
     if (typeof raw.message_id === 'string') event.messageId = raw.message_id;
     if (typeof raw.tool_name === 'string') event.toolName = raw.tool_name;
+    if (typeof raw.tool_input === 'string') event.toolInput = raw.tool_input;
     if (typeof raw.preview === 'string') event.preview = raw.preview;
     yield event;
   }
