@@ -13,15 +13,23 @@ import type { HermesCapabilities, HermesConnectionProfile } from '../hermes/type
 type Message = { id: string; role: 'user' | 'assistant'; text: string; activity?: ResponseActivity };
 type ConnectionState = 'checking' | 'connected' | 'streaming' | 'error';
 
-function applySessionActivity(state: ResponseActivity, event: SessionStreamEvent): ResponseActivity {
+function sessionActivityLabel(toolName?: string): { label: string; kind: 'tool' | 'reasoning' } {
+  if (!toolName || toolName === '_thinking') return { label: toolName === '_thinking' ? 'Reasoning' : 'Tool', kind: toolName === '_thinking' ? 'reasoning' : 'tool' };
+  return { label: toolName, kind: 'tool' };
+}
+
+export function applySessionActivity(state: ResponseActivity, event: SessionStreamEvent): ResponseActivity {
   if (event.type === 'run.started' || event.type === 'message.started') return { ...state, status: 'running' };
-  if (event.type === 'run.completed' || event.type === 'assistant.completed' || event.type === 'done') return { ...state, status: 'completed' };
+  if (event.type === 'run.completed' || event.type === 'assistant.completed' || event.type === 'done') {
+    return { ...state, status: 'completed', items: state.items.map((item) => item.status === 'running' ? { ...item, status: 'completed' } : item) };
+  }
   if (event.type === 'error' || event.type === 'run.failed') return { ...state, status: 'failed', error: event.message || 'Hermes response failed' };
   if (event.type.startsWith('tool.')) {
+    const presentation = sessionActivityLabel(event.toolName);
     const id = `${event.toolName || 'tool'}-${state.items.length}`;
     const status: 'failed' | 'completed' | 'running' = event.type === 'tool.failed' ? 'failed' : event.type === 'tool.completed' ? 'completed' : 'running';
-    const index = state.items.findIndex((item) => item.label === (event.toolName || 'Tool') && item.status === 'running');
-    const item = { id: index >= 0 ? state.items[index].id : id, kind: 'tool' as const, label: event.toolName || 'Tool', detail: event.preview, status };
+    const index = state.items.findIndex((item) => item.label === presentation.label && item.status === 'running');
+    const item = { id: index >= 0 ? state.items[index].id : id, kind: presentation.kind, label: presentation.label, detail: event.preview, status };
     return { ...state, status: 'running', items: index >= 0 ? state.items.map((current, currentIndex) => currentIndex === index ? item : current) : [...state.items, item] };
   }
   return state;
