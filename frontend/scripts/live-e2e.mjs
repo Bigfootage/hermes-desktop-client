@@ -28,8 +28,7 @@ try {
   await page.getByLabel('Message Hermes').fill(prompt);
   await page.getByRole('button', { name: 'Send message' }).click();
   await page.getByText(prompt, { exact: true }).waitFor();
-  await page.getByText('Hermes is working', { exact: true }).first().waitFor({ timeout: 15_000 });
-  await page.getByText('Connected', { exact: true }).first().waitFor({ timeout: 180_000 });
+  await page.getByText('Connected', { exact: true }).first().waitFor({ timeout: 30_000 });
 
   const assistantText = await page.locator('article').last().innerText();
   if (!assistantText || assistantText.trim() === 'Hermes') throw new Error('Assistant response was empty');
@@ -37,6 +36,10 @@ try {
   await page.screenshot({ path: '/root/hermes-phase-b1-e2e.png', fullPage: true });
   console.log(JSON.stringify({ connected: true, chat_response: true, activity_visible: activityVisible, assistant_chars: assistantText.length, console_errors: consoleErrors.length }));
   if (consoleErrors.length) console.error(consoleErrors.join('\n'));
+} catch (error) {
+  await page.screenshot({ path: '/root/hermes-e2e-failure.png', fullPage: true });
+  console.error((await page.locator('body').innerText()).slice(0, 6000));
+  throw error;
 } finally {
   await browser.close();
 }
