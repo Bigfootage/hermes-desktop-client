@@ -14,7 +14,8 @@
     "build:tauri": "tsc -b && vite build --mode tauri --outDir dist",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e:live": "node scripts/live-e2e.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -51,6 +52,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tauri-apps/cli": "^2.11.4",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
