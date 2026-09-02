@@ -33,8 +33,18 @@ try {
   const assistantText = await page.locator('article').last().innerText();
   if (!assistantText || assistantText.trim() === 'Hermes') throw new Error('Assistant response was empty');
   const activityVisible = await page.getByLabel('Response activity').isVisible().catch(() => false);
-  await page.screenshot({ path: '/root/hermes-phase-b1-e2e.png', fullPage: true });
-  console.log(JSON.stringify({ connected: true, chat_response: true, activity_visible: activityVisible, assistant_chars: assistantText.length, console_errors: consoleErrors.length }));
+
+  await page.getByRole('button', { name: 'Long task' }).click();
+  await page.getByRole('complementary', { name: 'Long-running tasks' }).waitFor();
+  await page.getByLabel('Long task instructions').fill('Reply with exactly RUNS_OK and do not use tools.');
+  await page.getByRole('button', { name: 'Start run' }).click();
+  await page.getByText('RUNS_OK', { exact: true }).waitFor({ timeout: 90_000 });
+  await page.getByText('completed', { exact: true }).first().waitFor({ timeout: 90_000 });
+  const runId = (await page.getByTitle('Copy run ID').innerText()).trim();
+  if (!runId.startsWith('run_')) throw new Error(`Unexpected run id: ${runId}`);
+
+  await page.screenshot({ path: '/root/hermes-phase-b3-e2e.png', fullPage: true });
+  console.log(JSON.stringify({ connected: true, chat_response: true, activity_visible: activityVisible, assistant_chars: assistantText.length, run_completed: true, run_id_valid: true, console_errors: consoleErrors.length }));
   if (consoleErrors.length) console.error(consoleErrors.join('\n'));
 } catch (error) {
   await page.screenshot({ path: '/root/hermes-e2e-failure.png', fullPage: true });
