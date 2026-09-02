@@ -316,6 +316,69 @@ export async function fetchTraces(limit: number = 50): Promise<unknown> {
   return res.json();
 }
 
+export async function switchModel(modelName: string): Promise<void> {
+  const res = await apiFetch(`/v1/models/switch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: modelName }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => res.statusText);
+    throw new Error(`Failed to switch model: ${detail}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Cron / Jobs
+// ---------------------------------------------------------------------------
+
+export interface CronJob {
+  id: string;
+  name: string;
+  schedule: string;
+  command?: string;
+  status: 'active' | 'paused' | 'error';
+  last_run_at?: number | null;
+  next_run_at?: number | null;
+  last_result?: string | null;
+}
+
+export async function fetchCronJobs(): Promise<CronJob[]> {
+  const res = await apiFetch(`/v1/cron`);
+  if (!res.ok) throw new Error(`Failed to fetch cron jobs: ${res.status}`);
+  const data = await res.json();
+  return data.jobs || [];
+}
+
+export async function runCronJob(jobId: string): Promise<void> {
+  const res = await apiFetch(`/v1/cron/${encodeURIComponent(jobId)}/run`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => res.statusText);
+    throw new Error(`Failed to run cron job: ${detail}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Runtime Health
+// ---------------------------------------------------------------------------
+
+export interface RuntimeHealth {
+  status: string;
+  version: string;
+  platform: string;
+  uptime_seconds: number;
+  model: string;
+  engine: string;
+}
+
+export async function fetchRuntimeHealth(): Promise<RuntimeHealth> {
+  const res = await apiFetch(`/health`);
+  if (!res.ok) throw new Error(`Failed to fetch health: ${res.status}`);
+  return res.json();
+}
+
 // ---------------------------------------------------------------------------
 // Speech
 // ---------------------------------------------------------------------------

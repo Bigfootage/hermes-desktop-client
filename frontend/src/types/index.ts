@@ -191,6 +191,30 @@ export interface ServerInfo {
   engine: string;
 }
 
+// --- Cron / Jobs ---
+
+export interface CronJob {
+  id: string;
+  name: string;
+  schedule: string;
+  command?: string;
+  status: 'active' | 'paused' | 'error';
+  last_run_at?: number | null;
+  next_run_at?: number | null;
+  last_result?: string | null;
+}
+
+// --- Runtime Health ---
+
+export interface RuntimeHealth {
+  status: string;
+  version: string;
+  platform: string;
+  uptime_seconds: number;
+  model: string;
+  engine: string;
+}
+
 // --- Log Types ---
 
 export interface LogEntry {

@@ -8,6 +8,7 @@ import { GetStartedPage } from './pages/GetStartedPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { DataSourcesPage } from './pages/DataSourcesPage';
 import { LogsPage } from './pages/LogsPage';
+import { ProductPanelPage } from './pages/ProductPanelPage';
 import { HermesChatPage } from './pages/HermesChatPage';
 import { CommandPalette } from './components/CommandPalette';
 import { SetupScreen } from './components/SetupScreen';
@@ -195,6 +196,7 @@ function LegacyApp() {
           <Route path="get-started" element={<GetStartedPage />} />
           <Route path="data-sources" element={<DataSourcesPage />} />
           <Route path="agents" element={<AgentsPage />} />
+          <Route path="product-panel" element={<ProductPanelPage />} />
           <Route path="logs" element={<LogsPage />} />
         </Route>
       </Routes>
