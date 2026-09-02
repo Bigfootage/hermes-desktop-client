@@ -1,16 +1,30 @@
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, Cable, ChevronLeft, CircleAlert, Menu, MessageSquarePlus, PanelLeftClose, Send, Square, Unplug, User, Wrench } from 'lucide-react';
+import { Bot, Cable, ChevronLeft, CircleAlert, Copy, Menu, MessageSquarePlus, PanelLeftClose, Pencil, Send, Square, Trash2, Unplug, User } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { ResponseActivityTimeline } from '../components/Chat/ResponseActivityTimeline';
-import { applyResponseEvent, createResponseActivity, type ResponseActivity } from '../hermes/activity';
+import { createResponseActivity, type ResponseActivity } from '../hermes/activity';
 import { clearConnection, loadConnection, saveConnection } from '../hermes/auth';
 import { HermesClient } from '../hermes/client';
 import { supportsResponses } from '../hermes/capabilities';
-import { streamResponse } from '../hermes/responses';
+import { createSession, deleteSession, forkSession, getSessionMessages, listSessions, patchSession, streamSessionChat, type HermesSession, type SessionStreamEvent } from '../hermes/sessions';
 import type { HermesCapabilities, HermesConnectionProfile } from '../hermes/types';
 
 type Message = { id: string; role: 'user' | 'assistant'; text: string; activity?: ResponseActivity };
 type ConnectionState = 'checking' | 'connected' | 'streaming' | 'error';
+
+function applySessionActivity(state: ResponseActivity, event: SessionStreamEvent): ResponseActivity {
+  if (event.type === 'run.started' || event.type === 'message.started') return { ...state, status: 'running' };
+  if (event.type === 'run.completed' || event.type === 'assistant.completed' || event.type === 'done') return { ...state, status: 'completed' };
+  if (event.type === 'error' || event.type === 'run.failed') return { ...state, status: 'failed', error: event.message || 'Hermes response failed' };
+  if (event.type.startsWith('tool.')) {
+    const id = `${event.toolName || 'tool'}-${state.items.length}`;
+    const status: 'failed' | 'completed' | 'running' = event.type === 'tool.failed' ? 'failed' : event.type === 'tool.completed' ? 'completed' : 'running';
+    const index = state.items.findIndex((item) => item.label === (event.toolName || 'Tool') && item.status === 'running');
+    const item = { id: index >= 0 ? state.items[index].id : id, kind: 'tool' as const, label: event.toolName || 'Tool', detail: event.preview, status };
+    return { ...state, status: 'running', items: index >= 0 ? state.items.map((current, currentIndex) => currentIndex === index ? item : current) : [...state.items, item] };
+  }
+  return state;
+}
 
 export function HermesChatPage() {
   const initial = loadConnection();
@@ -26,6 +40,9 @@ export function HermesChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sessions, setSessions] = useState<HermesSession[]>([]);
+  const [activeSession, setActiveSession] = useState<HermesSession | null>(null);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
   const previousId = useRef<string | undefined>(undefined);
   const abort = useRef<AbortController | undefined>(undefined);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -38,13 +55,63 @@ export function HermesChatPage() {
     Promise.all([client.health(), client.fetchCapabilities()])
       .then(([, caps]) => {
         if (!supportsResponses(caps)) throw new Error('This Hermes server does not advertise the Responses API required by this client');
-        if (active) { setCapabilities(caps); setConnectionState('connected'); setError(''); }
+        if (active) { setCapabilities(caps); setConnectionState('connected'); setError(''); void refreshSessions(); }
       })
       .catch((err) => {
         if (active) { setConnectionState('error'); setError(err instanceof Error ? err.message : String(err)); }
       });
     return () => { active = false; };
   }, [client]);
+
+  async function refreshSessions(selectId?: string) {
+    if (!client) return;
+    setSessionsLoading(true);
+    try {
+      const result = await listSessions(client, { limit: 100, includeChildren: true });
+      setSessions(result.data);
+      if (selectId) setActiveSession(result.data.find((session) => session.id === selectId) ?? null);
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setSessionsLoading(false); }
+  }
+
+  async function resumeSession(session: HermesSession) {
+    if (!client || streaming) return;
+    setError('');
+    try {
+      const history = await getSessionMessages(client, session.id);
+      setMessages(history.data.filter((message) => message.role === 'user' || message.role === 'assistant').map((message) => ({ id: message.id ?? crypto.randomUUID(), role: message.role as 'user' | 'assistant', text: message.text })));
+      setActiveSession(session); previousId.current = undefined;
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+  }
+
+  async function createConversation() {
+    if (!client) return;
+    if (streaming) abort.current?.abort();
+    try {
+      const session = await createSession(client, { source: 'desktop' });
+      setSessions((current) => [session, ...current]); setActiveSession(session); setMessages([]); setInput(''); setError(''); previousId.current = undefined;
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+  }
+
+  async function renameConversation(session: HermesSession) {
+    if (!client) return;
+    const title = window.prompt('Rename conversation', session.title || '');
+    if (title === null || !title.trim()) return;
+    try { const updated = await patchSession(client, session.id, { title: title.trim() }); setSessions((items) => items.map((item) => item.id === updated.id ? updated : item)); if (activeSession?.id === updated.id) setActiveSession(updated); }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+  }
+
+  async function forkConversation(session: HermesSession) {
+    if (!client) return;
+    try { const fork = await forkSession(client, session.id); setSessions((items) => [fork, ...items]); await resumeSession(fork); }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+  }
+
+  async function removeConversation(session: HermesSession) {
+    if (!client || !window.confirm(`Delete “${session.title || 'Untitled conversation'}”? This permanently removes its messages.`)) return;
+    try { await deleteSession(client, session.id); setSessions((items) => items.filter((item) => item.id !== session.id)); if (activeSession?.id === session.id) { setActiveSession(null); setMessages([]); } }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+  }
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
@@ -71,15 +138,20 @@ export function HermesChatPage() {
     setStreaming(true); setConnectionState('streaming'); setError('');
     const controller = new AbortController(); abort.current = controller;
     try {
-      for await (const event of streamResponse(client, text, { previousResponseId: previousId.current, signal: controller.signal })) {
+      let session = activeSession;
+      if (!session) {
+        session = await createSession(client, { source: 'desktop' });
+        setActiveSession(session); setSessions((current) => [session!, ...current]);
+      }
+      for await (const event of streamSessionChat(client, session.id, text, { signal: controller.signal })) {
         setMessages((current) => current.map((message) => message.id === assistantId ? {
           ...message,
-          text: event.delta ? message.text + event.delta : message.text,
-          activity: applyResponseEvent(message.activity ?? createResponseActivity(), event),
+          text: event.delta ? message.text + event.delta : event.type === 'assistant.completed' && event.content ? event.content : message.text,
+          activity: applySessionActivity(message.activity ?? createResponseActivity(), event),
         } : message));
-        if (event.response?.id) previousId.current = event.response.id;
-        if (event.type === 'error') throw new Error(typeof event.error === 'string' ? event.error : 'Hermes response failed');
+        if (event.type === 'error') throw new Error(event.message || 'Hermes response failed');
       }
+      void refreshSessions(session.id);
     } catch (err) {
       if (!(err instanceof DOMException && err.name === 'AbortError')) { setError(err instanceof Error ? err.message : String(err)); setConnectionState('error'); }
     } finally {
@@ -88,14 +160,10 @@ export function HermesChatPage() {
     }
   }
 
-  function newConversation() {
-    if (streaming) abort.current?.abort();
-    setMessages([]); setInput(''); setError(''); previousId.current = undefined;
-  }
 
   function disconnect() {
     if (streaming) abort.current?.abort();
-    clearConnection(); setProfile(null); setCapabilities(null); setMessages([]); previousId.current = undefined;
+    clearConnection(); setProfile(null); setCapabilities(null); setMessages([]); setSessions([]); setActiveSession(null); previousId.current = undefined;
   }
 
   function onComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -116,10 +184,10 @@ export function HermesChatPage() {
             <div className="flex items-center gap-2.5"><span className="grid h-8 w-8 place-items-center rounded-xl" style={{ background: 'var(--color-accent-subtle)', color: 'var(--color-accent)' }}><Bot size={18} /></span><div><div className="text-sm font-semibold">Hermes</div><div className="text-[10px] uppercase tracking-[0.14em]" style={{ color: 'var(--color-text-tertiary)' }}>Desktop</div></div></div>
             <button className="rounded-lg p-2 cursor-pointer hover:bg-black/5" onClick={() => setSidebarOpen(false)} aria-label="Collapse sidebar"><PanelLeftClose size={17} /></button>
           </div>
-          <button onClick={newConversation} className="mb-4 flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium cursor-pointer" style={{ background: 'var(--color-accent)', color: 'var(--color-on-accent)' }}><MessageSquarePlus size={16} />New conversation</button>
-          <nav aria-label="Hermes navigation" className="space-y-1">
-            <div className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium" style={{ background: 'var(--color-accent-subtle)', color: 'var(--color-text)' }}><Bot size={16} style={{ color: 'var(--color-accent)' }} />Conversation</div>
-            <div className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm" style={{ color: 'var(--color-text-tertiary)' }}><Wrench size={16} />Activity appears in chat</div>
+          <button onClick={() => void createConversation()} className="mb-3 flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium cursor-pointer" style={{ background: 'var(--color-accent)', color: 'var(--color-on-accent)' }}><MessageSquarePlus size={16} />New conversation</button>
+          <nav aria-label="Hermes sessions" className="min-h-0 flex-1 space-y-1 overflow-y-auto">
+            <div className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--color-text-tertiary)' }}>{sessionsLoading ? 'Loading sessions…' : 'Sessions'}</div>
+            {sessions.map((session) => <div key={session.id} className="group flex items-center rounded-lg" style={{ background: activeSession?.id === session.id ? 'var(--color-accent-subtle)' : undefined }}><button onClick={() => void resumeSession(session)} className="min-w-0 flex-1 truncate px-2 py-2 text-left text-xs cursor-pointer" title={session.title || session.preview || session.id}>{session.title || session.preview || 'Untitled conversation'}</button><div className="hidden shrink-0 items-center pr-1 group-hover:flex"><button aria-label="Rename session" title="Rename" onClick={() => void renameConversation(session)} className="p-1 cursor-pointer"><Pencil size={12} /></button><button aria-label="Fork session" title="Fork" onClick={() => void forkConversation(session)} className="p-1 cursor-pointer"><Copy size={12} /></button><button aria-label="Delete session" title="Delete" onClick={() => void removeConversation(session)} className="p-1 cursor-pointer" style={{ color: 'var(--color-error)' }}><Trash2 size={12} /></button></div></div>)}
           </nav>
           <div className="mt-auto rounded-xl border p-3" style={{ borderColor: 'var(--color-border)', background: 'var(--color-bg-secondary)' }}>
             <div className="mb-2 flex items-center gap-2 text-xs font-medium"><span className={`h-2 w-2 rounded-full ${connectionState === 'streaming' ? 'animate-pulse' : ''}`} style={{ background: connectionState === 'error' ? 'var(--color-error)' : connectionState === 'checking' ? 'var(--color-warning)' : 'var(--color-success)' }} />{statusLabel}</div>
@@ -133,8 +201,8 @@ export function HermesChatPage() {
       <section className="relative z-[2] flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center gap-3 border-b px-4" style={{ borderColor: 'var(--color-border)', background: 'color-mix(in srgb, var(--color-bg) 85%, transparent)', backdropFilter: 'blur(16px)' }}>
           {!sidebarOpen && <button className="rounded-lg p-2 cursor-pointer" onClick={() => setSidebarOpen(true)} aria-label="Open sidebar"><Menu size={18} /></button>}
-          <div className="min-w-0"><h1 className="truncate text-sm font-semibold">Hermes conversation</h1><p className="text-[11px]" style={{ color: 'var(--color-text-tertiary)' }}>{statusLabel}</p></div>
-          {messages.length > 0 && <button onClick={newConversation} className="ml-auto flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs cursor-pointer" style={{ color: 'var(--color-text-secondary)', background: 'var(--color-bg-secondary)' }}><MessageSquarePlus size={13} />New</button>}
+          <div className="min-w-0"><h1 className="truncate text-sm font-semibold">{activeSession?.title || 'Hermes conversation'}</h1><p className="text-[11px]" style={{ color: 'var(--color-text-tertiary)' }}>{statusLabel}</p></div>
+          {messages.length > 0 && <button onClick={() => void createConversation()} className="ml-auto flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs cursor-pointer" style={{ color: 'var(--color-text-secondary)', background: 'var(--color-bg-secondary)' }}><MessageSquarePlus size={13} />New</button>}
         </header>
 
         <div className="flex-1 overflow-y-auto px-4">
