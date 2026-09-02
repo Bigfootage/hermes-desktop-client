@@ -1,7 +1,8 @@
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, Cable, ChevronLeft, CircleAlert, Copy, Menu, MessageSquarePlus, PanelLeftClose, Pencil, Send, Square, Trash2, Unplug, User } from 'lucide-react';
+import { Activity, Bot, Cable, ChevronLeft, CircleAlert, Copy, Menu, MessageSquarePlus, PanelLeftClose, Pencil, Send, Square, Trash2, Unplug, User } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { ResponseActivityTimeline } from '../components/Chat/ResponseActivityTimeline';
+import { RunsPanel } from '../components/Chat/RunsPanel';
 import { createResponseActivity, type ResponseActivity } from '../hermes/activity';
 import { clearConnection, loadConnection, saveConnection } from '../hermes/auth';
 import { HermesClient } from '../hermes/client';
@@ -40,6 +41,7 @@ export function HermesChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [runsOpen, setRunsOpen] = useState(false);
   const [sessions, setSessions] = useState<HermesSession[]>([]);
   const [activeSession, setActiveSession] = useState<HermesSession | null>(null);
   const [sessionsLoading, setSessionsLoading] = useState(false);
@@ -202,7 +204,8 @@ export function HermesChatPage() {
         <header className="flex h-14 shrink-0 items-center gap-3 border-b px-4" style={{ borderColor: 'var(--color-border)', background: 'color-mix(in srgb, var(--color-bg) 85%, transparent)', backdropFilter: 'blur(16px)' }}>
           {!sidebarOpen && <button className="rounded-lg p-2 cursor-pointer" onClick={() => setSidebarOpen(true)} aria-label="Open sidebar"><Menu size={18} /></button>}
           <div className="min-w-0"><h1 className="truncate text-sm font-semibold">{activeSession?.title || 'Hermes conversation'}</h1><p className="text-[11px]" style={{ color: 'var(--color-text-tertiary)' }}>{statusLabel}</p></div>
-          {messages.length > 0 && <button onClick={() => void createConversation()} className="ml-auto flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs cursor-pointer" style={{ color: 'var(--color-text-secondary)', background: 'var(--color-bg-secondary)' }}><MessageSquarePlus size={13} />New</button>}
+          <button onClick={() => setRunsOpen((open) => !open)} className="ml-auto flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs cursor-pointer" style={{ color: runsOpen ? 'var(--color-accent)' : 'var(--color-text-secondary)', background: runsOpen ? 'var(--color-accent-subtle)' : 'var(--color-bg-secondary)' }} aria-expanded={runsOpen}><Activity size={13} />Long task</button>
+          {messages.length > 0 && <button onClick={() => void createConversation()} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs cursor-pointer" style={{ color: 'var(--color-text-secondary)', background: 'var(--color-bg-secondary)' }}><MessageSquarePlus size={13} />New</button>}
         </header>
 
         <div className="flex-1 overflow-y-auto px-4">
@@ -220,6 +223,7 @@ export function HermesChatPage() {
           </form>
         </div>
       </section>
+      {runsOpen && <RunsPanel profile={profile} onClose={() => setRunsOpen(false)} />}
     </main>
   );
 }
