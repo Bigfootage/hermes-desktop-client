@@ -26,6 +26,7 @@ export function SshTunnelGate({ status, onStatus }: { status: TunnelStatus; onSt
 export function SshTunnelSetup({ onConfigured }: { onConfigured: (status: TunnelStatus) => void }) {
   const [username, setUsername] = useState('');
   const [host, setHost] = useState('');
+  const [port, setPort] = useState(22);
   const [privateKeyPath, setPrivateKeyPath] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -45,7 +46,7 @@ export function SshTunnelSetup({ onConfigured }: { onConfigured: (status: Tunnel
     setBusy(true);
     setError('');
     try {
-      const profile: SshTunnelProfile = { username, host, privateKeyPath };
+      const profile: SshTunnelProfile = { username, host, port, privateKeyPath };
       onConfigured(await setupTunnel(profile));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -64,8 +65,9 @@ export function SshTunnelSetup({ onConfigured }: { onConfigured: (status: Tunnel
         <form onSubmit={submit} className="mt-6 space-y-4">
           <label className="block text-xs font-medium"><span className="flex items-center gap-1.5"><User size={13} />SSH username</span><input required autoComplete="username" className="mt-1.5 block w-full rounded-xl border bg-transparent px-3 py-2.5 text-sm outline-none focus:ring-2" style={{ borderColor: 'var(--color-input-border)' }} value={username} onChange={(event) => setUsername(event.target.value)} placeholder="hermes" /></label>
           <label className="block text-xs font-medium"><span className="flex items-center gap-1.5"><Server size={13} />SSH host</span><input required className="mt-1.5 block w-full rounded-xl border bg-transparent px-3 py-2.5 text-sm outline-none focus:ring-2" style={{ borderColor: 'var(--color-input-border)' }} value={host} onChange={(event) => setHost(event.target.value)} placeholder="vm.example.com" /></label>
+          <label className="block text-xs font-medium">SSH port<input required type="number" min={1} max={65535} className="mt-1.5 block w-full rounded-xl border bg-transparent px-3 py-2.5 text-sm outline-none" style={{ borderColor: 'var(--color-input-border)' }} value={port} onChange={(event) => setPort(Number(event.target.value))} /></label>
           <label className="block text-xs font-medium">Private key file<div className="mt-1.5 flex gap-2"><input readOnly required aria-label="Private key file" className="min-w-0 flex-1 rounded-xl border bg-transparent px-3 py-2.5 text-sm outline-none" style={{ borderColor: 'var(--color-input-border)' }} value={privateKeyPath} placeholder="Select an OpenSSH private key" /><button type="button" onClick={() => void browse()} className="rounded-xl border px-3 text-sm font-medium cursor-pointer" style={{ borderColor: 'var(--color-border)' }}>Browse…</button></div></label>
-          <p className="text-[11px] leading-5" style={{ color: 'var(--color-text-tertiary)' }}>The username, host, and key path are saved locally. The key file itself is never copied, read by the web interface, or uploaded.</p>
+          <p className="text-[11px] leading-5" style={{ color: 'var(--color-text-tertiary)' }}>Use an unencrypted OpenSSH key, or load a passphrase-protected key into ssh-agent first. Hermes never requests a passphrase. The key path is saved locally; the key is never exposed to JavaScript or uploaded.</p>
           {error && <p role="alert" className="flex items-start gap-2 rounded-lg p-2.5 text-xs" style={{ color: 'var(--color-error)', background: 'color-mix(in srgb, var(--color-error) 8%, transparent)' }}><CircleAlert size={14} className="shrink-0" />{error}</p>}
           <button disabled={busy || !username.trim() || !host.trim() || !privateKeyPath} className="flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium disabled:opacity-60 cursor-pointer" style={{ background: 'var(--color-accent)', color: 'var(--color-on-accent)' }}>{busy ? <><Loader size={14} className="animate-spin" />Starting tunnel…</> : 'Save and connect'}</button>
         </form>

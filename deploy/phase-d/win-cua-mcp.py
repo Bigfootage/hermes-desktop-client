@@ -3,6 +3,12 @@
 import hashlib, hmac, json, os, secrets, selectors, socket, sys, time
 PORT=18765
 MAX_BUFFER=1024*1024
+KDF_CONTEXT=b"hermes-desktop/phase-d-bridge/v1"
+
+def api_key():
+    value=os.environ.get("HERMES_API_KEY","").strip()
+    if not value: raise RuntimeError("HERMES_API_KEY is required in the Hermes service environment")
+    return value.encode()
 
 def manifest():
     exe=os.environ.get("HERMES_WIN_CUA_ADAPTER","/opt/hermes/bin/win-cua-mcp")
@@ -15,8 +21,8 @@ def handshake(secret:bytes):
     return (json.dumps(fields,separators=(",",":"))+"\n").encode()
 
 def run():
-    path=os.environ.get("HERMES_PHASE_D_SECRET_FILE","/etc/hermes/phase-d.secret")
-    secret=bytes.fromhex(open(path,encoding="ascii").read().strip())
+    key=api_key()
+    secret=hmac.new(key,KDF_CONTEXT,hashlib.sha256).digest()
     s=socket.create_connection(("127.0.0.1",PORT),timeout=10);s.sendall(handshake(secret))
     response=b""
     while not response.endswith(b"\n") and len(response)<64: response+=s.recv(64-len(response))

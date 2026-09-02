@@ -3,7 +3,7 @@ import { Check, ChevronDown, Edit3, Loader, Mic, MicOff, Unplug, VolumeX, Wifi, 
 import { clearConnection, isTauriRuntime, loadConnection } from '../../hermes/auth';
 import { HermesClient } from '../../hermes/client';
 import type { HermesConnectionProfile } from '../../hermes/types';
-import { clearTunnel, getAutostartEnabled, getTunnelStatus, retryTunnel, setAutostartEnabled, tunnelStatusLabel, type TunnelStatus } from '../../hermes/ssh-tunnel';
+import { clearTunnel, disconnectTunnel, getAutostartEnabled, getTunnelStatus, retryTunnel, setAutostartEnabled, tunnelStatusLabel, type TunnelStatus } from '../../hermes/ssh-tunnel';
 import { PhaseDControl } from '../../PhaseDControl';
 
 export type EndpointStatus = 'idle' | 'checking' | 'reachable' | 'unreachable' | 'degraded';
@@ -119,7 +119,9 @@ export function ConnectionStatus() {
               Last checked: {new Date(health.checkedAt).toLocaleTimeString()}
             </div>
           )}
-          <button onClick={() => { void Promise.all([clearConnection(), tunnel?.supported ? clearTunnel() : Promise.resolve()]).finally(() => window.location.reload()); }} className="mt-2 flex items-center gap-1.5 text-[11px] cursor-pointer" style={{ color: 'var(--color-text-secondary)' }}><Unplug size={11} />Disconnect</button>
+          <button onClick={() => { void clearConnection().finally(() => window.location.reload()); }} className="mt-2 flex items-center gap-1.5 text-[11px] cursor-pointer" style={{ color: 'var(--color-text-secondary)' }}><Unplug size={11} />Forget API credential</button>
+          {tunnel?.supported && <button onClick={() => void disconnectTunnel().then(() => getTunnelStatus().then(setTunnel))} className="flex items-center gap-1.5 text-[11px] cursor-pointer" style={{ color: 'var(--color-text-secondary)' }}><Unplug size={11} />Disconnect tunnel</button>}
+          {tunnel?.supported && <button onClick={() => { if (window.confirm('Forget SSH enrollment and disable launch at login?')) void setAutostartEnabled(false).then(() => clearTunnel()).finally(() => window.location.reload()); }} className="flex items-center gap-1.5 text-[11px] cursor-pointer" style={{ color: 'var(--color-error)' }}><Unplug size={11} />Forget SSH enrollment</button>}
         </div>
       )}
     </div>

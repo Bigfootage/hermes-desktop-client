@@ -19,8 +19,7 @@ use tokio::{
 type HmacSha256 = Hmac<Sha256>;
 pub const BRIDGE_PORT: u16 = 18765;
 pub const CUA_PIPE: &str = r"\\.\pipe\hermes-phase-d-cua";
-const SERVICE: &str = "Hermes Desktop Client";
-const SECRET_ACCOUNT: &str = "phase-d-bridge";
+const PHASE_D_KDF_CONTEXT: &[u8] = b"hermes-desktop/phase-d-bridge/v1";
 const MAX_HANDSHAKE: usize = 4096;
 const CLOCK_SKEW_MS: i64 = 30_000;
 const MANIFEST: &str = r#"version: 3
@@ -178,11 +177,11 @@ fn audit_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app_dir(app)?.join("phase-d-audit.jsonl"))
 }
 fn secret() -> Result<Vec<u8>, String> {
-    let value = keyring::Entry::new(SERVICE, SECRET_ACCOUNT)
-        .map_err(|_| "credential_store")?
-        .get_password()
-        .map_err(|_| "phase_d_not_enrolled")?;
-    hex::decode(value).map_err(|_| "invalid_bridge_secret".into())
+    let mut key = crate::hermes_transport::api_key_bytes()?;
+    let mut mac = HmacSha256::new_from_slice(&key).map_err(|_| "invalid_api_key")?;
+    mac.update(PHASE_D_KDF_CONTEXT);
+    key.fill(0);
+    Ok(mac.finalize().into_bytes().to_vec())
 }
 fn write_audit(app: &AppHandle, event: &str, result: &str) {
     if let Ok(path) = audit_path(app) {
@@ -376,9 +375,7 @@ pub async fn phase_d_disable(
     kill_cua(&mut m).await;
     let _ = std::fs::remove_file(enabled_path(&app)?);
     let _ = crate::ssh_tunnel::restart_with_phase_d(tunnel.inner(), false).await;
-    if forget {
-        let _ = keyring::Entry::new(SERVICE, SECRET_ACCOUNT).and_then(|e| e.delete_credential());
-    }
+
     m.status = PhaseDStatus::default();
     write_audit(
         &app,
@@ -389,13 +386,7 @@ pub async fn phase_d_disable(
 }
 #[tauri::command]
 pub async fn phase_d_rotate_credentials() -> Result<(), String> {
-    use rand::RngCore;
-    let mut bytes = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
-    keyring::Entry::new(SERVICE, SECRET_ACCOUNT)
-        .map_err(|_| "credential_store")?
-        .set_password(&hex::encode(bytes))
-        .map_err(|_| "credential_store".to_string())
+    Err("Phase D credentials are derived from the Hermes API key; rotate that key instead".into())
 }
 #[tauri::command]
 pub async fn phase_d_test() -> Result<String, String> {

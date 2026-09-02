@@ -6,6 +6,7 @@ export interface SshTunnelProfile {
   username: string;
   host: string;
   privateKeyPath: string;
+  port: number;
 }
 
 export type TunnelPhase = 'unsupported' | 'unconfigured' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'error';

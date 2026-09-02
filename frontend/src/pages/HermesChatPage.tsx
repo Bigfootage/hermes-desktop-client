@@ -11,7 +11,7 @@ import { HermesClient } from '../hermes/client';
 import { supportsResponses } from '../hermes/capabilities';
 import { createSession, deleteSession, forkSession, getSessionMessages, listSessions, patchSession, streamSessionChat, type HermesSession, type SessionStreamEvent } from '../hermes/sessions';
 import type { HermesCapabilities, HermesConnectionProfile, HermesClarifyRequest } from '../hermes/types';
-import { clearTunnel, disconnectTunnel, getTunnelStatus, shouldShowTunnelSetup, type TunnelStatus } from '../hermes/ssh-tunnel';
+import { getTunnelStatus, shouldShowTunnelSetup, type TunnelStatus } from '../hermes/ssh-tunnel';
 
 type Message = { id: string; role: 'user' | 'assistant'; text: string; activity?: ResponseActivity };
 type ConnectionState = 'checking' | 'connected' | 'streaming' | 'error';
@@ -227,10 +227,7 @@ export function HermesChatPage() {
   async function disconnect() {
     if (streaming) abort.current?.abort();
     try { await clearConnection(); } catch { /* credential storage best-effort */ }
-    if (tunnel?.supported) {
-      try { await clearTunnel(); } catch { await disconnectTunnel().catch(() => {}); }
-      setTunnel((current) => current ? { ...current, configured: false, phase: 'unconfigured', profile: undefined } : current);
-    }
+
     setProfile(null); setCapabilities(null); setMessages([]); setSessions([]); setActiveSession(null); previousId.current = undefined;
   }
 

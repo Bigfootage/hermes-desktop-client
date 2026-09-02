@@ -109,7 +109,17 @@ fn load_secret() -> Result<ConnectionProfile, String> {
         keyring::Error::NoEntry => "No Hermes connection is configured".into(),
         other => format!("Failed to read native credential storage: {other}"),
     })?;
-    serde_json::from_str(&value).map_err(|_| "Stored Hermes credential is invalid".into())
+    let mut profile: ConnectionProfile = serde_json::from_str(&value)
+        .map_err(|_| "Stored Hermes credential is invalid".to_string())?;
+    profile.base_url = effective_base(profile.base_url);
+    Ok(profile)
+}
+
+pub(crate) fn api_key_bytes() -> Result<Vec<u8>, String> {
+    load_secret()?
+        .api_key
+        .map(String::into_bytes)
+        .ok_or("Stored Hermes API key is empty".into())
 }
 
 fn public_profile() -> Result<Option<ConnectionProfile>, String> {
@@ -118,6 +128,7 @@ fn public_profile() -> Result<Option<ConnectionProfile>, String> {
             let mut profile: ConnectionProfile = serde_json::from_str(&value)
                 .map_err(|_| "Stored Hermes credential is invalid".to_string())?;
             profile.api_key = None;
+            profile.base_url = effective_base(profile.base_url);
             Ok(Some(profile))
         }
         Err(keyring::Error::NoEntry) => Ok(None),
@@ -478,5 +489,23 @@ mod tests {
         })
         .unwrap();
         assert!(value.get("apiKey").is_none());
+    }
+
+    #[test]
+    fn request_speech_transcription_and_stream_share_origin_policy() {
+        for path in [
+            "/v1/request",
+            "/v1/speech/health",
+            "/v1/speech/transcribe",
+            "/v1/stream",
+        ] {
+            let url = request_url("https://vm.example", path).unwrap();
+            let expected = if cfg!(target_os = "windows") {
+                "http://127.0.0.1:8642"
+            } else {
+                "https://vm.example"
+            };
+            assert_eq!(url.origin().ascii_serialization(), expected);
+        }
     }
 }

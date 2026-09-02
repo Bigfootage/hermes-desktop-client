@@ -2798,6 +2798,11 @@ pub fn run() {
             }
         }))
         .setup(move |app| {
+            if std::env::args_os().any(|arg| arg == "--hidden") {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
             // System tray
             let show = MenuItemBuilder::with_id("show", "Show / Hide").build(app)?;
             let health = MenuItemBuilder::with_id("health", "Health: starting...")

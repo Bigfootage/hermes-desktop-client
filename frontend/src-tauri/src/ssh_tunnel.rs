@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
+use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_autostart::ManagerExt;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -19,6 +20,12 @@ pub struct SshTunnelProfile {
     pub username: String,
     pub host: String,
     pub private_key_path: String,
+    #[serde(default = "default_ssh_port")]
+    pub port: u16,
+}
+
+fn default_ssh_port() -> u16 {
+    22
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -69,6 +76,8 @@ impl Default for TunnelStatus {
 pub struct SshTunnelManager {
     status: TunnelStatus,
     cancel: Option<oneshot::Sender<()>>,
+    supervisor: Option<JoinHandle<()>>,
+    generation: u64,
 }
 
 pub type SharedSshTunnel = Arc<Mutex<SshTunnelManager>>;
@@ -78,6 +87,7 @@ fn validate_profile(profile: SshTunnelProfile) -> Result<SshTunnelProfile, Strin
         username: profile.username.trim().to_string(),
         host: profile.host.trim().to_string(),
         private_key_path: profile.private_key_path.trim().to_string(),
+        port: profile.port,
     };
     if profile.username.is_empty() || profile.host.is_empty() || profile.private_key_path.is_empty()
     {
@@ -90,6 +100,9 @@ fn validate_profile(profile: SshTunnelProfile) -> Result<SshTunnelProfile, Strin
         || profile.username.contains('@')
     {
         return Err("Enter a valid SSH username and host".into());
+    }
+    if profile.port == 0 {
+        return Err("SSH port must be between 1 and 65535".into());
     }
     let key = Path::new(&profile.private_key_path);
     if !key.is_file() {
@@ -116,9 +129,15 @@ pub fn ssh_args(profile: &SshTunnelProfile, phase_d_enabled: bool) -> Vec<String
         "-o".into(),
         "ServerAliveCountMax=3".into(),
         "-o".into(),
+        "ConnectTimeout=10".into(),
+        "-o".into(),
         "StrictHostKeyChecking=yes".into(),
         "-o".into(),
         format!("UserKnownHostsFile={}", known_hosts.display()),
+        "-o".into(),
+        "GlobalKnownHostsFile=NUL".into(),
+        "-p".into(),
+        profile.port.to_string(),
         "-i".into(),
         profile.private_key_path.clone(),
         "-L".into(),
@@ -267,6 +286,7 @@ async fn supervise(
         let mut command = Command::new(exe);
         command
             .args(ssh_args(&profile, phase_d_enabled))
+            .kill_on_drop(true)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
@@ -295,14 +315,20 @@ async fn supervise(
         });
 
         tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(2)) => {
-                match child.try_wait() {
-                    Ok(None) => set_status(&state, TunnelPhase::Connected, attempt, None).await,
-                    _ => {}
+            probe = probe_tunnel() => {
+                match (probe, child.try_wait()) {
+                    (Ok(()), Ok(None)) => set_status(&state, TunnelPhase::Connected, attempt, None).await,
+                    _ => {
+                        let _ = child.kill().await;
+                        let _ = child.wait().await;
+                        set_status(&state, TunnelPhase::Error, attempt, Some(("health_timeout".into(), "The SSH process started, but Hermes did not become reachable on 127.0.0.1:8642.".into()))).await;
+                        return;
+                    }
                 }
             }
             _ = &mut cancel => {
                 let _ = child.kill().await;
+                let _ = child.wait().await;
                 set_status(&state, TunnelPhase::Disconnected, 0, None).await;
                 return;
             }
@@ -341,22 +367,43 @@ async fn supervise(
     }
 }
 
+async fn probe_tunnel() -> Result<(), ()> {
+    for _ in 0..40 {
+        if tokio::net::TcpStream::connect("127.0.0.1:8642")
+            .await
+            .is_ok()
+        {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    Err(())
+}
+
 async fn start_supervisor(
     state: SharedSshTunnel,
     profile: SshTunnelProfile,
     phase_d_enabled: bool,
 ) {
+    stop(&state).await;
     let (tx, rx) = oneshot::channel();
+    let generation;
     {
         let mut manager = state.lock().await;
-        if let Some(cancel) = manager.cancel.take() {
-            let _ = cancel.send(());
-        }
+        manager.generation = manager.generation.wrapping_add(1);
+        generation = manager.generation;
         manager.status.configured = true;
         manager.status.profile = Some(profile.clone());
         manager.cancel = Some(tx);
     }
-    tauri::async_runtime::spawn(supervise(state, profile, phase_d_enabled, rx));
+    let handle =
+        tauri::async_runtime::spawn(supervise(state.clone(), profile, phase_d_enabled, rx));
+    let mut manager = state.lock().await;
+    if manager.generation == generation {
+        manager.supervisor = Some(handle);
+    } else {
+        handle.abort();
+    }
 }
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -384,9 +431,15 @@ pub async fn start_saved(app: AppHandle, state: SharedSshTunnel) {
 }
 
 pub async fn stop(state: &SharedSshTunnel) {
-    let cancel = state.lock().await.cancel.take();
+    let (cancel, supervisor) = {
+        let mut manager = state.lock().await;
+        (manager.cancel.take(), manager.supervisor.take())
+    };
     if let Some(cancel) = cancel {
         let _ = cancel.send(());
+    }
+    if let Some(supervisor) = supervisor {
+        let _ = supervisor.await;
     }
 }
 
@@ -420,16 +473,40 @@ pub async fn ssh_tunnel_setup(
     }
     ssh_executable()?;
     let profile = validate_profile(profile)?;
-    save_profile(&app, &profile)?;
     let phase_d = app
         .path()
         .app_config_dir()
         .map(|p| p.join("phase-d.enabled").is_file())
         .unwrap_or(false);
-    start_supervisor(state.inner().clone(), profile, phase_d).await;
-    // Successful configuration enables launch-at-login by default. A failure here
-    // does not discard a valid tunnel profile; the UI exposes the toggle/error.
-    let _ = app.autolaunch().enable();
+    start_supervisor(state.inner().clone(), profile.clone(), phase_d).await;
+    let connected = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let phase = state.lock().await.status.phase.clone();
+            if phase == TunnelPhase::Connected {
+                return Ok(());
+            }
+            if phase == TunnelPhase::Error {
+                return Err(state
+                    .lock()
+                    .await
+                    .status
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| "SSH tunnel failed".into()));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .map_err(|_| "Timed out waiting for the SSH tunnel health check".to_string())?;
+    if let Err(error) = connected {
+        stop(state.inner()).await;
+        return Err(error);
+    }
+    save_profile(&app, &profile)?;
+    app.autolaunch()
+        .enable()
+        .map_err(|e| format!("Tunnel connected, but launch at login could not be enabled: {e}"))?;
     Ok(state.lock().await.status.clone())
 }
 
@@ -506,6 +583,7 @@ mod tests {
             username: "hermes".into(),
             host: "vm.example".into(),
             private_key_path: r"C:\Users\me\.ssh\id_ed25519".into(),
+            port: 22,
         }
     }
 
@@ -520,6 +598,8 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|v| v == ["-o", "StrictHostKeyChecking=yes"]));
+        assert!(args.windows(2).any(|v| v == ["-p", "22"]));
+        assert!(args.iter().any(|v| v == "ConnectTimeout=10"));
         assert!(args
             .windows(2)
             .any(|v| v == ["-L", "127.0.0.1:8642:127.0.0.1:8642"]));
