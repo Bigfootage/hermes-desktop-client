@@ -265,6 +265,85 @@ pub async fn hermes_request(input: RequestInput) -> Result<ResponseOutput, Strin
 }
 
 #[tauri::command]
+pub async fn hermes_speech_health() -> Result<bool, String> {
+    let profile = load_secret()?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create Hermes HTTP client: {e}"))?;
+    let response = client
+        .get(request_url(&profile.base_url, "/v1/speech/health")?)
+        .bearer_auth(
+            profile
+                .api_key
+                .as_deref()
+                .ok_or("Stored Hermes API key is empty")?,
+        )
+        .send()
+        .await
+        .map_err(|e| format!("Hermes speech health check failed: {e}"))?;
+    if !response.status().is_success() {
+        return Ok(false);
+    }
+    let body: serde_json::Value = response.json().await.unwrap_or_default();
+    Ok(body
+        .get("available")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || matches!(
+            body.get("status").and_then(|v| v.as_str()),
+            Some("ok" | "healthy")
+        ))
+}
+
+#[tauri::command]
+pub async fn hermes_transcribe_audio(
+    audio_data: Vec<u8>,
+    mime_type: String,
+) -> Result<serde_json::Value, String> {
+    if audio_data.is_empty() {
+        return Err("The voice recording was empty".into());
+    }
+    let profile = load_secret()?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("Failed to create Hermes HTTP client: {e}"))?;
+    let extension = if mime_type.contains("ogg") {
+        "ogg"
+    } else {
+        "webm"
+    };
+    let part = reqwest::multipart::Part::bytes(audio_data)
+        .file_name(format!("recording.{extension}"))
+        .mime_str(&mime_type)
+        .map_err(|_| "Unsupported audio recording format".to_string())?;
+    let response = client
+        .post(request_url(&profile.base_url, "/v1/speech/transcribe")?)
+        .bearer_auth(
+            profile
+                .api_key
+                .as_deref()
+                .ok_or("Stored Hermes API key is empty")?,
+        )
+        .multipart(reqwest::multipart::Form::new().part("file", part))
+        .send()
+        .await
+        .map_err(|e| format!("Hermes transcription failed: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!(
+            "Hermes transcription failed (HTTP {})",
+            status.as_u16()
+        ));
+    }
+    response
+        .json()
+        .await
+        .map_err(|e| format!("Hermes returned an invalid transcript: {e}"))
+}
+
+#[tauri::command]
 pub async fn hermes_stream(
     input: RequestInput,
     stream_id: String,

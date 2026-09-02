@@ -2861,6 +2861,8 @@ pub fn run() {
             hermes_transport::hermes_load_connection,
             hermes_transport::hermes_clear_connection,
             hermes_transport::hermes_request,
+            hermes_transport::hermes_speech_health,
+            hermes_transport::hermes_transcribe_audio,
             hermes_transport::hermes_stream,
             hermes_transport::hermes_cancel_stream,
             get_setup_status,

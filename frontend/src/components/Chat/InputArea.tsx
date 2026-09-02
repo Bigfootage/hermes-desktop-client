@@ -106,10 +106,10 @@ export function InputArea() {
   const {
     state: speechState,
     error: speechError,
-    available: speechAvailable,
+    availability: speechAvailable,
     startRecording,
     stopRecording,
-  } = useSpeech();
+  } = useSpeech(null);
 
   // Abort in-flight stream when the user switches models mid-generation.
   // This prevents errors from trying to continue a stream with a stale model.
@@ -127,10 +127,10 @@ export function InputArea() {
     prevModelRef.current = selectedModel;
   }, [selectedModel, streamState.isStreaming, resetStream]);
 
-  const micDisabled = !speechEnabled || !speechAvailable || streamState.isStreaming;
+  const micDisabled = !speechEnabled || speechAvailable !== 'available' || streamState.isStreaming;
   const micReason: 'not-enabled' | 'no-backend' | 'streaming' | undefined =
     !speechEnabled ? 'not-enabled'
-    : !speechAvailable ? 'no-backend'
+    : speechAvailable !== 'available' ? 'no-backend'
     : streamState.isStreaming ? 'streaming'
     : undefined;
 

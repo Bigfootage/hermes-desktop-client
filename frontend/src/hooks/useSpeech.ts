@@ -1,92 +1,54 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
-import { transcribeAudio, fetchSpeechHealth } from '../lib/api';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { checkSpeech, microphoneErrorMessage, transcribeHermesAudio, type SpeechAvailability } from '../hermes/speech';
+import type { HermesConnectionProfile } from '../hermes/types';
 
 export type SpeechState = 'idle' | 'recording' | 'transcribing';
 
-export function useSpeech() {
+export function useSpeech(profile: HermesConnectionProfile | null) {
   const [state, setState] = useState<SpeechState>('idle');
   const [error, setError] = useState<string | null>(null);
-  const [available, setAvailable] = useState(false);
+  const [availability, setAvailability] = useState<SpeechAvailability>('checking');
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // Check if speech backend is available on mount
-  useEffect(() => {
-    fetchSpeechHealth()
-      .then((health) => setAvailable(health.available))
-      .catch(() => setAvailable(false));
-  }, []);
-
-  const startRecording = useCallback(async (): Promise<void> => {
-    setError(null);
-
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setError('Microphone not supported in this browser');
+  const refreshAvailability = useCallback(async () => {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setAvailability('unsupported');
       return;
     }
+    if (!profile) { setAvailability('unavailable'); return; }
+    setAvailability('checking');
+    setAvailability(await checkSpeech(profile) ? 'available' : 'unavailable');
+  }, [profile]);
 
+  useEffect(() => { void refreshAvailability(); }, [refreshAvailability]);
+  useEffect(() => () => streamRef.current?.getTracks().forEach((track) => track.stop()), []);
+
+  const startRecording = useCallback(async () => {
+    setError(null);
+    if (availability !== 'available') return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-
       const recorder = new MediaRecorder(stream);
-      chunksRef.current = [];
+      streamRef.current = stream; chunksRef.current = [];
+      recorder.ondataavailable = (event) => { if (event.data.size > 0) chunksRef.current.push(event.data); };
+      recorder.start(); mediaRecorderRef.current = recorder; setState('recording');
+    } catch (cause) { setError(microphoneErrorMessage(cause)); setState('idle'); }
+  }, [availability]);
 
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
+  const stopRecording = useCallback((): Promise<string> => new Promise((resolve, reject) => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state !== 'recording' || !profile) { reject(new Error('No active voice recording')); return; }
+    recorder.onstop = async () => {
+      setState('transcribing');
+      streamRef.current?.getTracks().forEach((track) => track.stop()); streamRef.current = null;
+      const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' }); chunksRef.current = [];
+      try { const text = await transcribeHermesAudio(profile, blob); setState('idle'); resolve(text); }
+      catch (cause) { const message = cause instanceof Error ? cause.message : 'Transcription failed'; setError(message); setState('idle'); reject(cause); }
+    };
+    recorder.stop();
+  }), [profile]);
 
-      recorder.start();
-      mediaRecorderRef.current = recorder;
-      setState('recording');
-    } catch (err) {
-      setError('Microphone access denied');
-      setState('idle');
-    }
-  }, []);
-
-  const stopRecording = useCallback(async (): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const recorder = mediaRecorderRef.current;
-      if (!recorder || recorder.state !== 'recording') {
-        reject(new Error('Not recording'));
-        return;
-      }
-
-      recorder.onstop = async () => {
-        setState('transcribing');
-
-        // Stop all audio tracks
-        streamRef.current?.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-
-        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
-        chunksRef.current = [];
-
-        try {
-          const result = await transcribeAudio(blob);
-          setState('idle');
-          resolve(result.text);
-        } catch (err) {
-          setState('idle');
-          const msg = err instanceof Error ? err.message : 'Transcription failed';
-          setError(msg);
-          reject(err);
-        }
-      };
-
-      recorder.stop();
-    });
-  }, []);
-
-  return {
-    state,
-    error,
-    available,
-    startRecording,
-    stopRecording,
-    isRecording: state === 'recording',
-    isTranscribing: state === 'transcribing',
-  };
+  return { state, error, availability, startRecording, stopRecording, refreshAvailability, clearError: () => setError(null) };
 }

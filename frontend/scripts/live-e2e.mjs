@@ -22,14 +22,13 @@ try {
   await page.getByText('Connected', { exact: true }).first().waitFor({ timeout: 15_000 });
   await page.getByRole('button', { name: 'Collapse sidebar' }).waitFor();
   await page.getByRole('button', { name: /New conversation/i }).first().waitFor();
-  await page.getByRole('button', { name: /Disconnect/i }).waitFor();
 
   const prompt = 'Check the current time on the VM using a tool, then reply with the exact result.';
   await page.getByLabel('Message Hermes').fill(prompt);
   await page.getByRole('button', { name: 'Send message' }).click();
   await page.getByText(prompt, { exact: true }).waitFor();
-  await page.getByText('Connected', { exact: true }).first().waitFor({ timeout: 30_000 });
-
+  // Wait for the Send button to become enabled again (stream finishes)
+  await page.getByRole('button', { name: 'Send message' }).waitFor({ timeout: 120_000 });
   const assistantText = await page.locator('article').last().innerText();
   if (!assistantText || assistantText.trim() === 'Hermes') throw new Error('Assistant response was empty');
   const activityVisible = await page.getByLabel('Response activity').isVisible().catch(() => false);

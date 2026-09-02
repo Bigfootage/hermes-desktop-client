@@ -2,6 +2,7 @@ import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from '
 import { Activity, Bot, Cable, ChevronLeft, CircleAlert, Copy, Menu, MessageSquarePlus, PanelLeftClose, Pencil, Send, Square, Trash2, Unplug, User } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { ResponseActivityTimeline } from '../components/Chat/ResponseActivityTimeline';
+import { ConnectionStatus, VoiceCapture } from '../components/Chat/ConnectionStatus';
 import { RunsPanel } from '../components/Chat/RunsPanel';
 import { createResponseActivity, type ResponseActivity } from '../hermes/activity';
 import { clearConnection, isTauriRuntime, loadConnection, saveConnection, validateConnection } from '../hermes/auth';
@@ -194,7 +195,8 @@ export function HermesChatPage() {
 
   async function disconnect() {
     if (streaming) abort.current?.abort();
-    await clearConnection(); setProfile(null); setCapabilities(null); setMessages([]); setSessions([]); setActiveSession(null); previousId.current = undefined;
+    try { await clearConnection(); } catch { /* credential storage best-effort */ }
+    setProfile(null); setCapabilities(null); setMessages([]); setSessions([]); setActiveSession(null); previousId.current = undefined;
   }
 
   function onComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -221,10 +223,7 @@ export function HermesChatPage() {
             {sessions.map((session) => <div key={session.id} className="group flex items-center rounded-lg" style={{ background: activeSession?.id === session.id ? 'var(--color-accent-subtle)' : undefined }}><button onClick={() => void resumeSession(session)} className="min-w-0 flex-1 truncate px-2 py-2 text-left text-xs cursor-pointer" title={session.title || session.preview || session.id}>{session.title || session.preview || 'Untitled conversation'}</button><div className="hidden shrink-0 items-center pr-1 group-hover:flex"><button aria-label="Rename session" title="Rename" onClick={() => void renameConversation(session)} className="p-1 cursor-pointer"><Pencil size={12} /></button><button aria-label="Fork session" title="Fork" onClick={() => void forkConversation(session)} className="p-1 cursor-pointer"><Copy size={12} /></button><button aria-label="Delete session" title="Delete" onClick={() => void removeConversation(session)} className="p-1 cursor-pointer" style={{ color: 'var(--color-error)' }}><Trash2 size={12} /></button></div></div>)}
           </nav>
           <div className="mt-auto rounded-xl border p-3" style={{ borderColor: 'var(--color-border)', background: 'var(--color-bg-secondary)' }}>
-            <div className="mb-2 flex items-center gap-2 text-xs font-medium"><span className={`h-2 w-2 rounded-full ${connectionState === 'streaming' ? 'animate-pulse' : ''}`} style={{ background: connectionState === 'error' ? 'var(--color-error)' : connectionState === 'checking' ? 'var(--color-warning)' : 'var(--color-success)' }} />{statusLabel}</div>
-            <p className="truncate text-[11px]" title={profile.baseUrl} style={{ color: 'var(--color-text-tertiary)' }}>{capabilities?.profile ?? profile.baseUrl}</p>
-            {capabilities?.model && <p className="mt-1 truncate text-[11px]" style={{ color: 'var(--color-text-tertiary)' }}>{capabilities.model}</p>}
-            <button onClick={() => void disconnect()} className="mt-3 flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: 'var(--color-text-secondary)' }}><Unplug size={12} />Disconnect</button>
+            <ConnectionStatus />
           </div>
         </div>
       </aside>
@@ -234,7 +233,6 @@ export function HermesChatPage() {
           {!sidebarOpen && <button className="rounded-lg p-2 cursor-pointer" onClick={() => setSidebarOpen(true)} aria-label="Open sidebar"><Menu size={18} /></button>}
           <div className="min-w-0"><h1 className="truncate text-sm font-semibold">{activeSession?.title || 'Hermes conversation'}</h1><p className="text-[11px]" style={{ color: 'var(--color-text-tertiary)' }}>{statusLabel}</p></div>
           <button onClick={() => setRunsOpen((open) => !open)} className="ml-auto flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs cursor-pointer" style={{ color: runsOpen ? 'var(--color-accent)' : 'var(--color-text-secondary)', background: runsOpen ? 'var(--color-accent-subtle)' : 'var(--color-bg-secondary)' }} aria-expanded={runsOpen}><Activity size={13} />Long task</button>
-          {messages.length > 0 && <button onClick={() => void createConversation()} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs cursor-pointer" style={{ color: 'var(--color-text-secondary)', background: 'var(--color-bg-secondary)' }}><MessageSquarePlus size={13} />New</button>}
         </header>
 
         <div className="flex-1 overflow-y-auto px-4">
@@ -248,7 +246,12 @@ export function HermesChatPage() {
           {error && <div role="alert" className="mx-auto mb-2 flex max-w-3xl items-start gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: 'color-mix(in srgb, var(--color-error) 9%, transparent)', color: 'var(--color-error)' }}><CircleAlert size={14} className="mt-0.5 shrink-0" /><span className="flex-1">{error}</span>{connectionState === 'error' && <button onClick={disconnect} className="shrink-0 underline cursor-pointer">Reconnect</button>}</div>}
           <form onSubmit={send} className="mx-auto max-w-3xl rounded-2xl border p-2 shadow-sm" style={{ borderColor: 'var(--color-input-border)', background: 'var(--color-input-bg)' }}>
             <textarea aria-label="Message Hermes" rows={2} placeholder={connectionState === 'checking' ? 'Checking Hermes…' : 'Message Hermes…'} className="block max-h-40 min-h-12 w-full resize-none bg-transparent px-2 py-1.5 text-sm outline-none" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={onComposerKeyDown} disabled={connectionState === 'checking'} />
-            <div className="flex items-center justify-between px-1"><span className="text-[10px]" style={{ color: 'var(--color-text-tertiary)' }}>Enter to send · Shift+Enter for a new line</span><button type={streaming ? 'button' : 'submit'} onClick={streaming ? () => abort.current?.abort() : undefined} disabled={!streaming && !canSend} aria-label={streaming ? 'Stop response' : 'Send message'} className="grid h-8 w-8 place-items-center rounded-lg disabled:opacity-40 cursor-pointer" style={{ background: 'var(--color-accent)', color: 'var(--color-on-accent)' }}>{streaming ? <Square size={13} fill="currentColor" /> : <Send size={14} />}</button></div>
+            <div className="flex items-center justify-between px-1">
+              <div className="flex items-center gap-1">
+                <VoiceCapture profile={profile} disabled={!canSend} onTranscript={(text) => setInput((current) => `${current}${current ? ' ' : ''}${text}`)} />
+                <span className="text-[10px]" style={{ color: 'var(--color-text-tertiary)' }}>Enter to send · Shift+Enter for a new line</span>
+              </div>
+              <button type={streaming ? 'button' : 'submit'} onClick={streaming ? () => abort.current?.abort() : undefined} disabled={!streaming && !canSend} aria-label={streaming ? 'Stop response' : 'Send message'} className="grid h-8 w-8 place-items-center rounded-lg disabled:opacity-40 cursor-pointer" style={{ background: 'var(--color-accent)', color: 'var(--color-on-accent)' }}>{streaming ? <Square size={13} fill="currentColor" /> : <Send size={14} />}</button></div>
           </form>
         </div>
       </section>
