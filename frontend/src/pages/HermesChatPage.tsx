@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import { ResponseActivityTimeline } from '../components/Chat/ResponseActivityTimeline';
 import { RunsPanel } from '../components/Chat/RunsPanel';
 import { createResponseActivity, type ResponseActivity } from '../hermes/activity';
-import { clearConnection, loadConnection, saveConnection } from '../hermes/auth';
+import { clearConnection, isTauriRuntime, loadConnection, saveConnection, validateConnection } from '../hermes/auth';
 import { HermesClient } from '../hermes/client';
 import { supportsResponses } from '../hermes/capabilities';
 import { createSession, deleteSession, forkSession, getSessionMessages, listSessions, patchSession, streamSessionChat, type HermesSession, type SessionStreamEvent } from '../hermes/sessions';
@@ -36,13 +36,12 @@ export function applySessionActivity(state: ResponseActivity, event: SessionStre
 }
 
 export function HermesChatPage() {
-  const initial = loadConnection();
-  const [profile, setProfile] = useState<HermesConnectionProfile | null>(initial);
-  const [url, setUrl] = useState(initial?.baseUrl ?? 'https://');
-  const [key, setKey] = useState(initial?.apiKey ?? '');
-  const [allowInsecure, setAllowInsecure] = useState(initial?.allowInsecure ?? false);
+  const [profile, setProfile] = useState<HermesConnectionProfile | null>(null);
+  const [url, setUrl] = useState('https://');
+  const [key, setKey] = useState('');
+
   const [capabilities, setCapabilities] = useState<HermesCapabilities | null>(null);
-  const [connectionState, setConnectionState] = useState<ConnectionState>(initial ? 'checking' : 'error');
+  const [connectionState, setConnectionState] = useState<ConnectionState>('checking');
   const [error, setError] = useState('');
   const [connecting, setConnecting] = useState(false);
   const [input, setInput] = useState('');
@@ -57,6 +56,16 @@ export function HermesChatPage() {
   const abort = useRef<AbortController | undefined>(undefined);
   const endRef = useRef<HTMLDivElement | null>(null);
   const client = useMemo(() => profile ? new HermesClient(profile) : null, [profile]);
+
+  useEffect(() => {
+    let active = true;
+    void loadConnection().then((saved) => {
+      if (!active) return;
+      if (saved) { setProfile(saved); setUrl(saved.baseUrl); }
+      else setConnectionState('error');
+    }).catch((err) => { if (active) { setConnectionState('error'); setError(err instanceof Error ? err.message : String(err)); } });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     if (!client) return;
@@ -128,12 +137,24 @@ export function HermesChatPage() {
   async function connect(e: FormEvent) {
     e.preventDefault(); setConnecting(true); setError('');
     try {
-      const next = { baseUrl: url, apiKey: key, allowInsecure };
-      const candidate = new HermesClient(next);
-      await candidate.health();
-      const caps = await candidate.fetchCapabilities();
+      const next = { baseUrl: url, apiKey: key };
+      let saved: HermesConnectionProfile;
+      let caps: HermesCapabilities;
+      if (isTauriRuntime()) {
+        await validateConnection(next);
+        saved = await saveConnection(next);
+        const candidate = new HermesClient(saved);
+        await candidate.health();
+        caps = await candidate.fetchCapabilities();
+      } else {
+        const candidate = new HermesClient(next);
+        await candidate.health();
+        caps = await candidate.fetchCapabilities();
+        saved = await saveConnection(next);
+      }
       if (!supportsResponses(caps)) throw new Error('This Hermes server does not advertise the Responses API required by this client');
-      saveConnection(next); setProfile(next); setCapabilities(caps); setConnectionState('connected');
+      setKey('');
+      setProfile(saved); setCapabilities(caps); setConnectionState('connected');
     } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
     finally { setConnecting(false); }
   }
@@ -171,16 +192,16 @@ export function HermesChatPage() {
   }
 
 
-  function disconnect() {
+  async function disconnect() {
     if (streaming) abort.current?.abort();
-    clearConnection(); setProfile(null); setCapabilities(null); setMessages([]); setSessions([]); setActiveSession(null); previousId.current = undefined;
+    await clearConnection(); setProfile(null); setCapabilities(null); setMessages([]); setSessions([]); setActiveSession(null); previousId.current = undefined;
   }
 
   function onComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); }
   }
 
-  if (!profile) return <ConnectionScreen url={url} apiKey={key} allowInsecure={allowInsecure} connecting={connecting} error={error} onUrl={setUrl} onKey={setKey} onAllowInsecure={setAllowInsecure} onConnect={connect} />;
+  if (!profile) return <ConnectionScreen url={url} apiKey={key} connecting={connecting} error={error} onUrl={setUrl} onKey={setKey} onConnect={connect} />;
 
   const statusLabel = connectionState === 'checking' ? 'Checking connection' : connectionState === 'streaming' ? 'Hermes is working' : connectionState === 'error' ? 'Connection issue' : 'Connected';
   const canSend = input.trim().length > 0 && !streaming && connectionState === 'connected';
@@ -203,7 +224,7 @@ export function HermesChatPage() {
             <div className="mb-2 flex items-center gap-2 text-xs font-medium"><span className={`h-2 w-2 rounded-full ${connectionState === 'streaming' ? 'animate-pulse' : ''}`} style={{ background: connectionState === 'error' ? 'var(--color-error)' : connectionState === 'checking' ? 'var(--color-warning)' : 'var(--color-success)' }} />{statusLabel}</div>
             <p className="truncate text-[11px]" title={profile.baseUrl} style={{ color: 'var(--color-text-tertiary)' }}>{capabilities?.profile ?? profile.baseUrl}</p>
             {capabilities?.model && <p className="mt-1 truncate text-[11px]" style={{ color: 'var(--color-text-tertiary)' }}>{capabilities.model}</p>}
-            <button onClick={disconnect} className="mt-3 flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: 'var(--color-text-secondary)' }}><Unplug size={12} />Disconnect</button>
+            <button onClick={() => void disconnect()} className="mt-3 flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: 'var(--color-text-secondary)' }}><Unplug size={12} />Disconnect</button>
           </div>
         </div>
       </aside>
@@ -245,7 +266,7 @@ function EmptyConversation({ checking }: { checking: boolean }) {
   return <div className="flex flex-1 items-center justify-center py-16"><div className="max-w-md text-center"><span className="mx-auto mb-5 grid h-14 w-14 place-items-center rounded-2xl" style={{ background: 'var(--color-accent-subtle)', color: 'var(--color-accent)', boxShadow: '0 0 30px var(--color-accent-glow)' }}><Bot size={27} /></span><h2 className="text-xl font-semibold tracking-tight">What can Hermes help with?</h2><p className="mt-2 text-sm leading-6" style={{ color: 'var(--color-text-secondary)' }}>{checking ? 'Verifying your Hermes connection…' : 'Responses stream directly from your Hermes VM. Tool and reasoning activity will appear alongside the answer as Hermes reports it.'}</p></div></div>;
 }
 
-interface ConnectionScreenProps { url: string; apiKey: string; allowInsecure: boolean; connecting: boolean; error: string; onUrl: (value: string) => void; onKey: (value: string) => void; onAllowInsecure: (value: boolean) => void; onConnect: (event: FormEvent) => void }
+interface ConnectionScreenProps { url: string; apiKey: string; connecting: boolean; error: string; onUrl: (value: string) => void; onKey: (value: string) => void; onConnect: (event: FormEvent) => void }
 function ConnectionScreen(props: ConnectionScreenProps) {
-  return <main className="relative grid h-full place-items-center overflow-auto p-6" style={{ background: 'var(--color-bg)' }}><div className="hud-backdrop" aria-hidden="true" /><div className="relative z-10 w-full max-w-md rounded-2xl border p-7 shadow-lg" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}><span className="mb-5 grid h-11 w-11 place-items-center rounded-xl" style={{ background: 'var(--color-accent-subtle)', color: 'var(--color-accent)' }}><Cable size={21} /></span><h1 className="text-2xl font-semibold tracking-tight">Connect to Hermes</h1><p className="mt-2 text-sm leading-6" style={{ color: 'var(--color-text-secondary)' }}>Use your existing Hermes API. Your key remains in session storage for this desktop session.</p><form onSubmit={props.onConnect} className="mt-6 space-y-4"><label className="block text-xs font-medium">API base URL<input className="mt-1.5 block w-full rounded-xl border bg-transparent px-3 py-2.5 text-sm outline-none focus:ring-2" style={{ borderColor: 'var(--color-input-border)' }} value={props.url} onChange={(e) => props.onUrl(e.target.value)} placeholder="https://your-hermes-vm" /></label><label className="block text-xs font-medium">API key<input type="password" className="mt-1.5 block w-full rounded-xl border bg-transparent px-3 py-2.5 text-sm outline-none focus:ring-2" style={{ borderColor: 'var(--color-input-border)' }} value={props.apiKey} onChange={(e) => props.onKey(e.target.value)} autoComplete="off" /></label><label className="flex items-start gap-2 text-xs leading-5" style={{ color: 'var(--color-text-secondary)' }}><input className="mt-1" type="checkbox" checked={props.allowInsecure} onChange={(e) => props.onAllowInsecure(e.target.checked)} />Explicitly allow insecure HTTP for a remote host</label>{props.error && <p role="alert" className="flex items-start gap-2 rounded-lg p-2.5 text-xs" style={{ color: 'var(--color-error)', background: 'color-mix(in srgb, var(--color-error) 8%, transparent)' }}><CircleAlert size={14} className="shrink-0" />{props.error}</p>}<button disabled={props.connecting} className="flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium disabled:opacity-60 cursor-pointer" style={{ background: 'var(--color-accent)', color: 'var(--color-on-accent)' }}>{props.connecting ? 'Connecting…' : 'Connect to Hermes'}{!props.connecting && <ChevronLeft size={15} className="rotate-180" />}</button></form></div></main>;
+  return <main className="relative grid h-full place-items-center overflow-auto p-6" style={{ background: 'var(--color-bg)' }}><div className="hud-backdrop" aria-hidden="true" /><div className="relative z-10 w-full max-w-md rounded-2xl border p-7 shadow-lg" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}><span className="mb-5 grid h-11 w-11 place-items-center rounded-xl" style={{ background: 'var(--color-accent-subtle)', color: 'var(--color-accent)' }}><Cable size={21} /></span><h1 className="text-2xl font-semibold tracking-tight">Connect to Hermes</h1><p className="mt-2 text-sm leading-6" style={{ color: 'var(--color-text-secondary)' }}>Use your existing Hermes API. Desktop builds store the key in your operating system's credential vault; browser development keeps it only for the current tab.</p><form onSubmit={props.onConnect} className="mt-6 space-y-4"><label className="block text-xs font-medium">API base URL<input className="mt-1.5 block w-full rounded-xl border bg-transparent px-3 py-2.5 text-sm outline-none focus:ring-2" style={{ borderColor: 'var(--color-input-border)' }} value={props.url} onChange={(e) => props.onUrl(e.target.value)} placeholder="https://your-hermes-vm" /></label><label className="block text-xs font-medium">API key<input type="password" className="mt-1.5 block w-full rounded-xl border bg-transparent px-3 py-2.5 text-sm outline-none focus:ring-2" style={{ borderColor: 'var(--color-input-border)' }} value={props.apiKey} onChange={(e) => props.onKey(e.target.value)} autoComplete="off" /></label>{props.error && <p role="alert" className="flex items-start gap-2 rounded-lg p-2.5 text-xs" style={{ color: 'var(--color-error)', background: 'color-mix(in srgb, var(--color-error) 8%, transparent)' }}><CircleAlert size={14} className="shrink-0" />{props.error}</p>}<button disabled={props.connecting} className="flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium disabled:opacity-60 cursor-pointer" style={{ background: 'var(--color-accent)', color: 'var(--color-on-accent)' }}>{props.connecting ? 'Connecting…' : 'Connect to Hermes'}{!props.connecting && <ChevronLeft size={15} className="rotate-180" />}</button></form></div></main>;
 }

@@ -1,4 +1,4 @@
-export interface HermesConnectionProfile { baseUrl: string; apiKey: string; allowInsecure?: boolean }
+export interface HermesConnectionProfile { baseUrl: string; apiKey?: string; allowInsecure?: boolean }
 export interface HermesCapabilities { version?: string; profile?: string; model?: string; features: Record<string, boolean>; raw: Record<string, unknown> }
 export type HermesResponseOutputItem = { id?: string; type: string; text?: string; name?: string; arguments?: unknown; output?: unknown; [key: string]: unknown }
 export interface HermesResponse { id: string; status?: string; output?: HermesResponseOutputItem[]; conversation?: string | { id: string }; [key: string]: unknown }
