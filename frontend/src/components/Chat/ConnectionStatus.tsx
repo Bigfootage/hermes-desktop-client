@@ -3,6 +3,8 @@ import { Check, ChevronDown, Edit3, Loader, Mic, MicOff, Unplug, VolumeX, Wifi, 
 import { clearConnection, isTauriRuntime, loadConnection } from '../../hermes/auth';
 import { HermesClient } from '../../hermes/client';
 import type { HermesConnectionProfile } from '../../hermes/types';
+import { clearTunnel, getAutostartEnabled, getTunnelStatus, retryTunnel, setAutostartEnabled, tunnelStatusLabel, type TunnelStatus } from '../../hermes/ssh-tunnel';
+import { PhaseDControl } from '../../PhaseDControl';
 
 export type EndpointStatus = 'idle' | 'checking' | 'reachable' | 'unreachable' | 'degraded';
 
@@ -12,6 +14,8 @@ export function ConnectionStatus() {
   const [expanded, setExpanded] = useState(false);
   const [profile, setProfile] = useState<{ baseUrl: string } | null>(null);
   const [health, setHealth] = useState<EndpointHealth | null>(null);
+  const [tunnel, setTunnel] = useState<TunnelStatus | null>(null);
+  const [autostart, setAutostart] = useState<boolean | null>(null);
   const storage = isTauriRuntime() ? 'Windows Credential Manager' : 'this browser session';
 
   useEffect(() => {
@@ -31,6 +35,16 @@ export function ConnectionStatus() {
       })();
     });
     return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let active = true;
+    const poll = () => void getTunnelStatus().then((next) => { if (active) setTunnel(next); }).catch(() => {});
+    poll();
+    void getAutostartEnabled().then((enabled) => { if (active) setAutostart(enabled); }).catch(() => {});
+    const timer = window.setInterval(poll, 2_000);
+    return () => { active = false; window.clearInterval(timer); };
   }, []);
 
   if (!profile) return null;
@@ -56,12 +70,20 @@ export function ConnectionStatus() {
       </button>
       {expanded && (
         <div className="mt-3 space-y-2 border-t pt-2" style={{ borderColor: 'var(--color-border)' }}>
+          {isTauriRuntime() && <PhaseDControl />}
           <div className="text-[11px]" style={{ color: 'var(--color-text-secondary)' }}>
             <strong>Endpoint:</strong> {profile.baseUrl}
           </div>
           <div className="text-[11px]" style={{ color: 'var(--color-text-secondary)' }}>
             <strong>Credentials:</strong> Stored in {storage}
           </div>
+          {tunnel?.supported && (
+            <>
+              <div className="text-[11px]" style={{ color: tunnel.phase === 'connected' ? 'var(--color-success)' : 'var(--color-warning)' }}><strong>SSH:</strong> {tunnelStatusLabel(tunnel)}</div>
+              {autostart !== null && <label className="flex items-center justify-between gap-3 text-[11px]" style={{ color: 'var(--color-text-secondary)' }}><span>Launch at login</span><input type="checkbox" checked={autostart} onChange={(event) => { const enabled = event.target.checked; setAutostart(enabled); void setAutostartEnabled(enabled).then(setAutostart).catch(() => setAutostart(!enabled)); }} /></label>}
+              {(tunnel.phase === 'error' || tunnel.phase === 'disconnected') && <button onClick={() => void retryTunnel().then(setTunnel)} className="flex items-center gap-1.5 text-[11px] cursor-pointer" style={{ color: 'var(--color-accent)' }}><Wifi size={12} />Retry secure tunnel</button>}
+            </>
+          )}
           {health && (
             <div className="flex items-center gap-2 text-[11px]">
               {health.status === 'reachable' ? <Wifi size={13} style={{ color: 'var(--color-success)' }} /> : health.status === 'checking' ? <Loader size={13} className="animate-spin" /> : <WifiOff size={13} style={{ color: 'var(--color-error)' }} />}
@@ -97,7 +119,7 @@ export function ConnectionStatus() {
               Last checked: {new Date(health.checkedAt).toLocaleTimeString()}
             </div>
           )}
-          <button onClick={() => { void clearConnection(); window.location.reload(); }} className="mt-2 flex items-center gap-1.5 text-[11px] cursor-pointer" style={{ color: 'var(--color-text-secondary)' }}><Unplug size={11} />Disconnect</button>
+          <button onClick={() => { void Promise.all([clearConnection(), tunnel?.supported ? clearTunnel() : Promise.resolve()]).finally(() => window.location.reload()); }} className="mt-2 flex items-center gap-1.5 text-[11px] cursor-pointer" style={{ color: 'var(--color-text-secondary)' }}><Unplug size={11} />Disconnect</button>
         </div>
       )}
     </div>

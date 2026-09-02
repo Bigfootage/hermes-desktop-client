@@ -1,6 +1,6 @@
 [package]
 name = "openjarvis-desktop"
-version = "1.1.0"
+version = "1.2.0"
 description = "OpenJarvis Desktop — Native AI assistant with energy monitoring, trace debugging, and learning visualization"
 edition = "2021"
 license = "MIT"
@@ -24,6 +24,10 @@ serde_json = "1"
 reqwest = { version = "0.13", features = ["json", "multipart", "stream"] }
 futures-util = "0.3"
 tokio = { version = "1", features = ["full"] }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+rand = "0.8"
 
 # Cloud API keys are stored in the OS credential store via `keyring`. keyring v3
 # enables NO backend by default — without an explicit per-platform feature it
@@ -36,6 +40,7 @@ keyring = { version = "3", features = ["apple-native"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
+windows-sys = { version = "0.59", features = ["Win32_System_RemoteDesktop", "Win32_System_Threading"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Blocking Secret Service backend (no internal async runtime, so it is safe to

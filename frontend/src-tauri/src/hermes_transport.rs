@@ -9,6 +9,7 @@ use tokio::sync::oneshot;
 
 const SERVICE: &str = "Hermes Desktop Client";
 const ACCOUNT: &str = "hermes-api";
+const WINDOWS_TUNNEL_BASE: &str = "http://127.0.0.1:8642";
 static STREAM_CANCELLATIONS: LazyLock<Mutex<HashMap<String, oneshot::Sender<()>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -87,11 +88,19 @@ fn normalized_base(input: &str) -> Result<String, String> {
     Ok(url.to_string().trim_end_matches('/').to_string())
 }
 
+fn effective_base(base: String) -> String {
+    if cfg!(target_os = "windows") {
+        WINDOWS_TUNNEL_BASE.into()
+    } else {
+        base
+    }
+}
+
 fn request_url(base: &str, path: &str) -> Result<Url, String> {
     if !path.starts_with('/') || path.starts_with("//") {
         return Err("Hermes request path must start with one slash".into());
     }
-    let base = normalized_base(base)?;
+    let base = effective_base(normalized_base(base)?);
     Url::parse(&format!("{base}{path}")).map_err(|_| "Invalid Hermes request path".into())
 }
 

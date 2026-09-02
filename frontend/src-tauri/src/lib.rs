@@ -7,6 +7,8 @@ use tauri_plugin_autostart::MacosLauncher;
 use tokio::sync::Mutex;
 
 mod hermes_transport;
+mod phase_d;
+mod ssh_tunnel;
 
 const OLLAMA_PORT: u16 = 11434;
 const JARVIS_PORT: u16 = 8000;
@@ -2766,13 +2768,20 @@ async fn hide_overlay() -> Result<(), String> {
 pub fn run() {
     let backend: SharedBackend = Arc::new(Mutex::new(BackendManager::default()));
     let status: SharedStatus = Arc::new(Mutex::new(SetupStatus::default()));
+    let ssh_tunnel: ssh_tunnel::SharedSshTunnel =
+        Arc::new(Mutex::new(ssh_tunnel::SshTunnelManager::default()));
+    let phase_d: phase_d::SharedPhaseD = Arc::new(Mutex::new(phase_d::PhaseDManager::default()));
 
     let boot_backend_ref = backend.clone();
     let boot_status_ref = status.clone();
+    #[cfg(target_os = "windows")]
+    let setup_ssh_tunnel = ssh_tunnel.clone();
 
     tauri::Builder::default()
         .manage(backend.clone())
         .manage(status.clone())
+        .manage(ssh_tunnel.clone())
+        .manage(phase_d.clone())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -2850,7 +2859,15 @@ pub fn run() {
                 }
             }
 
-            // Auto-start backend services on launch
+            // Windows is a thin client: start its private, app-managed SSH
+            // tunnel instead of launching the quarantined OpenJarvis runtime.
+            #[cfg(target_os = "windows")]
+            tauri::async_runtime::spawn(ssh_tunnel::start_saved(
+                app.handle().clone(),
+                setup_ssh_tunnel.clone(),
+            ));
+
+            #[cfg(not(target_os = "windows"))]
             tauri::async_runtime::spawn(boot_backend(boot_backend_ref, boot_status_ref));
 
             Ok(())
@@ -2865,6 +2882,20 @@ pub fn run() {
             hermes_transport::hermes_transcribe_audio,
             hermes_transport::hermes_stream,
             hermes_transport::hermes_cancel_stream,
+            ssh_tunnel::ssh_tunnel_status,
+            ssh_tunnel::ssh_tunnel_setup,
+            ssh_tunnel::ssh_tunnel_disconnect,
+            ssh_tunnel::ssh_tunnel_retry,
+            ssh_tunnel::ssh_tunnel_clear,
+            ssh_tunnel::ssh_autostart_status,
+            ssh_tunnel::ssh_set_autostart,
+            phase_d::phase_d_status,
+            phase_d::phase_d_enable,
+            phase_d::phase_d_disable,
+            phase_d::phase_d_test,
+            phase_d::phase_d_rotate_credentials,
+            phase_d::phase_d_export_audit,
+            phase_d::phase_d_clear_audit,
             get_setup_status,
             get_api_base,
             start_backend,
@@ -2900,8 +2931,10 @@ pub fn run() {
         .run(move |_app, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 let b = backend.clone();
+                let tunnel = ssh_tunnel.clone();
                 tauri::async_runtime::spawn(async move {
                     b.lock().await.stop_all().await;
+                    ssh_tunnel::stop(&tunnel).await;
                 });
             }
         });

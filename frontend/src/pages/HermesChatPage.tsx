@@ -1,8 +1,9 @@
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Bot, Cable, ChevronLeft, CircleAlert, Copy, Eye, EyeOff, HelpCircle, Key, Menu, MessageSquarePlus, PanelLeftClose, Pencil, Send, Square, Trash2, Unplug, User } from 'lucide-react';
+import { Activity, Bot, Cable, CircleAlert, Copy, Eye, EyeOff, HelpCircle, Key, Menu, MessageSquarePlus, PanelLeftClose, Pencil, Send, Square, Trash2, Unplug, User } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { ResponseActivityTimeline } from '../components/Chat/ResponseActivityTimeline';
 import { ConnectionStatus, VoiceCapture } from '../components/Chat/ConnectionStatus';
+import { SshTunnelGate, SshTunnelSetup } from '../components/SshTunnelSetup';
 import { RunsPanel } from '../components/Chat/RunsPanel';
 import { createResponseActivity, type ResponseActivity } from '../hermes/activity';
 import { clearConnection, isTauriRuntime, loadConnection, saveConnection, validateConnection } from '../hermes/auth';
@@ -10,6 +11,7 @@ import { HermesClient } from '../hermes/client';
 import { supportsResponses } from '../hermes/capabilities';
 import { createSession, deleteSession, forkSession, getSessionMessages, listSessions, patchSession, streamSessionChat, type HermesSession, type SessionStreamEvent } from '../hermes/sessions';
 import type { HermesCapabilities, HermesConnectionProfile, HermesClarifyRequest } from '../hermes/types';
+import { clearTunnel, disconnectTunnel, getTunnelStatus, shouldShowTunnelSetup, type TunnelStatus } from '../hermes/ssh-tunnel';
 
 type Message = { id: string; role: 'user' | 'assistant'; text: string; activity?: ResponseActivity };
 type ConnectionState = 'checking' | 'connected' | 'streaming' | 'error';
@@ -38,6 +40,8 @@ export function applySessionActivity(state: ResponseActivity, event: SessionStre
 
 export function HermesChatPage() {
   const [profile, setProfile] = useState<HermesConnectionProfile | null>(null);
+  const [tunnel, setTunnel] = useState<TunnelStatus | null>(null);
+  const [tunnelChecked, setTunnelChecked] = useState(!isTauriRuntime());
   const [url, setUrl] = useState('https://');
   const [key, setKey] = useState('');
 
@@ -62,6 +66,26 @@ export function HermesChatPage() {
   const client = useMemo(() => profile ? new HermesClient(profile) : null, [profile]);
 
   useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let active = true;
+    const poll = async () => {
+      try {
+        const next = await getTunnelStatus();
+        if (active) {
+          setTunnel(next);
+          setTunnelChecked(true);
+          if (next?.supported) setUrl(next.endpoint);
+        }
+      } catch {
+        if (active) setTunnelChecked(true);
+      }
+    };
+    void poll();
+    const timer = window.setInterval(poll, 1_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
+
+  useEffect(() => {
     let active = true;
     void loadConnection().then((saved) => {
       if (!active) return;
@@ -84,7 +108,7 @@ export function HermesChatPage() {
         if (active) { setConnectionState('error'); setError(err instanceof Error ? err.message : String(err)); }
       });
     return () => { active = false; };
-  }, [client]);
+  }, [client, tunnel?.phase]);
 
   async function refreshSessions(selectId?: string) {
     if (!client) return;
@@ -203,6 +227,10 @@ export function HermesChatPage() {
   async function disconnect() {
     if (streaming) abort.current?.abort();
     try { await clearConnection(); } catch { /* credential storage best-effort */ }
+    if (tunnel?.supported) {
+      try { await clearTunnel(); } catch { await disconnectTunnel().catch(() => {}); }
+      setTunnel((current) => current ? { ...current, configured: false, phase: 'unconfigured', profile: undefined } : current);
+    }
     setProfile(null); setCapabilities(null); setMessages([]); setSessions([]); setActiveSession(null); previousId.current = undefined;
   }
 
@@ -210,7 +238,10 @@ export function HermesChatPage() {
     if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); }
   }
 
-  if (!profile) return <ConnectionScreen url={url} apiKey={key} connecting={connecting} error={error} onUrl={setUrl} onKey={setKey} onConnect={connect} />;
+  if (!tunnelChecked) return <main className="grid h-full place-items-center" style={{ background: 'var(--color-bg)' }}>Checking secure connection…</main>;
+  if (shouldShowTunnelSetup(tunnel)) return <SshTunnelSetup onConfigured={(next) => { setTunnel(next); setUrl(next.endpoint); }} />;
+  if (tunnel?.supported && tunnel.configured && tunnel.phase !== 'connected') return <SshTunnelGate status={tunnel} onStatus={setTunnel} />;
+  if (!profile) return <ConnectionScreen url={url} apiKey={key} managedTunnel={!!tunnel?.supported} connecting={connecting} error={error} onUrl={setUrl} onKey={setKey} onConnect={connect} />;
 
   const statusLabel = connectionState === 'checking' ? 'Checking connection' : connectionState === 'streaming' ? 'Hermes is working' : connectionState === 'error' ? 'Connection issue' : 'Connected';
   const canSend = input.trim().length > 0 && !streaming && connectionState === 'connected';
@@ -305,7 +336,7 @@ function EmptyConversation({ checking }: { checking: boolean }) {
   return <div className="flex flex-1 items-center justify-center py-16"><div className="max-w-md text-center"><span className="mx-auto mb-5 grid h-14 w-14 place-items-center rounded-2xl" style={{ background: 'var(--color-accent-subtle)', color: 'var(--color-accent)', boxShadow: '0 0 30px var(--color-accent-glow)' }}><Bot size={27} /></span><h2 className="text-xl font-semibold tracking-tight">What can Hermes help with?</h2><p className="mt-2 text-sm leading-6" style={{ color: 'var(--color-text-secondary)' }}>{checking ? 'Verifying your Hermes connection…' : 'Responses stream directly from your Hermes VM. Tool and reasoning activity will appear alongside the answer as Hermes reports it.'}</p></div></div>;
 }
 
-interface ConnectionScreenProps { url: string; apiKey: string; connecting: boolean; error: string; onUrl: (value: string) => void; onKey: (value: string) => void; onConnect: (event: FormEvent) => void }
+interface ConnectionScreenProps { url: string; apiKey: string; managedTunnel: boolean; connecting: boolean; error: string; onUrl: (value: string) => void; onKey: (value: string) => void; onConnect: (event: FormEvent) => void }
 function ConnectionScreen(props: ConnectionScreenProps) {
-  return <main className="relative grid h-full place-items-center overflow-auto p-6" style={{ background: 'var(--color-bg)' }}><div className="hud-backdrop" aria-hidden="true" /><div className="relative z-10 w-full max-w-md rounded-2xl border p-7 shadow-lg" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}><span className="mb-5 grid h-11 w-11 place-items-center rounded-xl" style={{ background: 'var(--color-accent-subtle)', color: 'var(--color-accent)' }}><Cable size={21} /></span><h1 className="text-2xl font-semibold tracking-tight">Connect to Hermes</h1><p className="mt-2 text-sm leading-6" style={{ color: 'var(--color-text-secondary)' }}>Use your existing Hermes API. Desktop builds store the key in your operating system's credential vault; browser development keeps it only for the current tab.</p><form onSubmit={props.onConnect} className="mt-6 space-y-4"><label className="block text-xs font-medium">API base URL<input className="mt-1.5 block w-full rounded-xl border bg-transparent px-3 py-2.5 text-sm outline-none focus:ring-2" style={{ borderColor: 'var(--color-input-border)' }} value={props.url} onChange={(e) => props.onUrl(e.target.value)} placeholder="https://your-hermes-vm" /></label><label className="block text-xs font-medium">API key<input type="password" className="mt-1.5 block w-full rounded-xl border bg-transparent px-3 py-2.5 text-sm outline-none focus:ring-2" style={{ borderColor: 'var(--color-input-border)' }} value={props.apiKey} onChange={(e) => props.onKey(e.target.value)} autoComplete="off" /></label>{props.error && <p role="alert" className="flex items-start gap-2 rounded-lg p-2.5 text-xs" style={{ color: 'var(--color-error)', background: 'color-mix(in srgb, var(--color-error) 8%, transparent)' }}><CircleAlert size={14} className="shrink-0" />{props.error}</p>}<button disabled={props.connecting} className="flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium disabled:opacity-60 cursor-pointer" style={{ background: 'var(--color-accent)', color: 'var(--color-on-accent)' }}>{props.connecting ? 'Connecting…' : 'Connect to Hermes'}{!props.connecting && <ChevronLeft size={15} className="rotate-180" />}</button></form></div></main>;
+  return <main className="relative grid h-full place-items-center overflow-auto p-6" style={{ background: 'var(--color-bg)' }}><div className="hud-backdrop" aria-hidden="true" /><div className="relative z-10 w-full max-w-md rounded-2xl border p-7 shadow-lg" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}><span className="mb-5 grid h-11 w-11 place-items-center rounded-xl" style={{ background: 'var(--color-accent-subtle)', color: 'var(--color-accent)' }}><Cable size={21} /></span><h1 className="text-2xl font-semibold tracking-tight">Connect to Hermes</h1><p className="mt-2 text-sm leading-6" style={{ color: 'var(--color-text-secondary)' }}>Use your existing Hermes API key. Desktop builds store it in Windows Credential Manager; it is never saved in the web interface.</p><form onSubmit={props.onConnect} className="mt-6 space-y-4">{!props.managedTunnel && <label className="block text-xs font-medium">API base URL<input className="mt-1.5 block w-full rounded-xl border bg-transparent px-3 py-2.5 text-sm outline-none focus:ring-2" style={{ borderColor: 'var(--color-input-border)' }} value={props.url} onChange={(e) => props.onUrl(e.target.value)} placeholder="https://your-hermes-vm" /></label>}<label className="block text-xs font-medium">API key<input type="password" className="mt-1.5 block w-full rounded-xl border bg-transparent px-3 py-2.5 text-sm outline-none focus:ring-2" style={{ borderColor: 'var(--color-input-border)' }} value={props.apiKey} onChange={(e) => props.onKey(e.target.value)} autoComplete="off" /></label>{props.error && <p role="alert" className="flex items-start gap-2 rounded-lg p-2.5 text-xs" style={{ color: 'var(--color-error)', background: 'color-mix(in srgb, var(--color-error) 8%, transparent)' }}><CircleAlert size={14} className="shrink-0" />{props.error}</p>}<button disabled={props.connecting} className="flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium disabled:opacity-60 cursor-pointer" style={{ background: 'var(--color-accent)', color: 'var(--color-on-accent)' }}>{props.connecting ? 'Validating…' : 'Connect securely'}</button></form></div></main>;
 }

@@ -2801,15 +2801,19 @@ dependencies = [
 
 [[package]]
 name = "openjarvis-desktop"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "dispatch",
  "futures-util",
+ "hex",
+ "hmac",
  "keyring",
  "objc",
+ "rand 0.8.6",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
@@ -2822,6 +2826,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tokio",
  "toml_edit 0.25.12+spec-1.1.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
