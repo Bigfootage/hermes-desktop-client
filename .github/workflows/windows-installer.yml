@@ -41,8 +41,21 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Bundle verified Cua Windows runtime
+        shell: pwsh
+        run: |
+          $url = "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.23.2/cua-driver-rs-0.23.2-windows-x86_64-binary.zip"
+          $zip = Join-Path $env:RUNNER_TEMP "cua-driver.zip"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $actual = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          $expected = "27a41831d5dda71082b58154ff87966a9ad8131ce66e8060da2d860558655c13"
+          if ($actual -ne $expected) { throw "Cua runtime checksum mismatch" }
+          $destination = "src-tauri/resources/cua-driver"
+          New-Item -ItemType Directory -Force -Path $destination | Out-Null
+          Expand-Archive -Path $zip -DestinationPath $destination -Force
+
       - name: Build NSIS and MSI installers
-        run: npm run tauri build -- --bundles nsis,msi
+        run: npm run tauri build -- --bundles nsis,msi --config '{"bundle":{"resources":{"resources/cua-driver/*":"cua-driver/"}}}'
 
       - name: Upload Windows installers
         uses: actions/upload-artifact@v4

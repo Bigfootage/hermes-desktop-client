@@ -2798,6 +2798,8 @@ pub fn run() {
             }
         }))
         .setup(move |app| {
+            #[cfg(target_os = "windows")]
+            phase_d::configure_bundled_driver(app.handle());
             if std::env::args_os().any(|arg| arg == "--hidden") {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.hide();

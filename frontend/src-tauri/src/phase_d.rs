@@ -64,8 +64,6 @@ resources:
 pub enum PhaseDState {
     #[default]
     Disabled,
-    Enabling,
-    WaitingForInteractiveSession,
     StartingCua,
     StartingProxy,
     ConnectingTunnel,
@@ -232,11 +230,27 @@ fn cua_exe() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("cua-driver.exe"))
 }
+
+/// Prefer the release-pinned driver bundled by Windows CI. The environment
+/// override remains available for development and emergency replacement.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn configure_bundled_driver(app: &AppHandle) {
+    if std::env::var_os("HERMES_CUA_DRIVER_EXE").is_some() {
+        return;
+    }
+    if let Ok(resources) = app.path().resource_dir() {
+        let bundled = resources.join("cua-driver").join("cua-driver.exe");
+        if bundled.is_file() {
+            std::env::set_var("HERMES_CUA_DRIVER_EXE", bundled);
+        }
+    }
+}
 async fn proxy_connection(
     stream: TcpStream,
     secret: Vec<u8>,
     seen: Arc<Mutex<HashSet<String>>>,
     app: AppHandle,
+    state: SharedPhaseD,
 ) -> Result<(), String> {
     let (read, mut write) = stream.into_split();
     let mut reader = BufReader::new(read);
@@ -251,6 +265,12 @@ async fn proxy_connection(
     }
     write.write_all(b"OK\n").await.map_err(|_| "auth_io")?;
     write_audit(&app, "adapter_authenticated", "allowed");
+    {
+        let mut manager = state.lock().await;
+        manager.status.adapter_connected = true;
+        manager.status.last_heartbeat_ms = Some(now_ms());
+        manager.status.state = PhaseDState::Ready;
+    }
     let mut child = Command::new(cua_exe())
         .args(["mcp", "--socket", CUA_PIPE])
         .stdin(std::process::Stdio::piped())
@@ -265,11 +285,19 @@ async fn proxy_connection(
     let b = tokio::io::copy(&mut cout, &mut write);
     let _ = tokio::try_join!(a, b);
     let _ = child.kill().await;
+    {
+        let mut manager = state.lock().await;
+        manager.status.adapter_connected = false;
+        if manager.status.enabled {
+            manager.status.state = PhaseDState::Degraded;
+        }
+    }
     Ok(())
 }
 async fn run_proxy(
     app: AppHandle,
     secret: Vec<u8>,
+    state: SharedPhaseD,
     mut cancel: oneshot::Receiver<()>,
 ) -> Result<(), String> {
     let listener = TcpListener::bind(loopback_addr(BRIDGE_PORT))
@@ -277,8 +305,26 @@ async fn run_proxy(
         .map_err(|_| "proxy_bind")?;
     let seen = Arc::new(Mutex::new(HashSet::new()));
     loop {
-        tokio::select! {_=&mut cancel=>return Ok(()), accepted=listener.accept()=>{let (stream,peer)=accepted.map_err(|_|"proxy_accept")?;if !peer.ip().is_loopback(){continue}let s=secret.clone();let n=seen.clone();let a=app.clone();tauri::async_runtime::spawn(async move{if let Err(code)=proxy_connection(stream,s,n,a.clone()).await{write_audit(&a,"adapter_auth",&code);}});}}
+        tokio::select! {_=&mut cancel=>return Ok(()), accepted=listener.accept()=>{let (stream,peer)=accepted.map_err(|_|"proxy_accept")?;if !peer.ip().is_loopback(){continue}let s=secret.clone();let n=seen.clone();let a=app.clone();let state=state.clone();tauri::async_runtime::spawn(async move{if let Err(code)=proxy_connection(stream,s,n,a.clone(),state).await{write_audit(&a,"adapter_auth",&code);}});}}
     }
+}
+
+async fn wait_for_cua() -> bool {
+    for _ in 0..20 {
+        if Command::new(cua_exe())
+            .args(["status", "--socket", CUA_PIPE])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await
+            .map(|status| status.success())
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    false
 }
 async fn kill_cua(manager: &mut PhaseDManager) {
     let _ = Command::new(cua_exe())
@@ -350,10 +396,22 @@ pub async fn phase_d_enable(
             .spawn()
             .map_err(|_| "cua_start")?;
         m.cua = Some(child);
+    }
+    if !wait_for_cua().await {
+        let mut m = state.lock().await;
+        kill_cua(&mut m).await;
+        m.status.state = PhaseDState::Error;
+        m.status.last_error = Some("cua_daemon_not_ready".into());
+        return Err("cua_daemon_not_ready".into());
+    }
+    {
+        let mut m = state.lock().await;
+        m.status.daemon_reachable = true;
+        m.status.state = PhaseDState::StartingProxy;
         let (tx, rx) = oneshot::channel();
         m.cancel = Some(tx);
+        tauri::async_runtime::spawn(run_proxy(app.clone(), sec, state.inner().clone(), rx));
         m.status.state = PhaseDState::ConnectingTunnel;
-        tauri::async_runtime::spawn(run_proxy(app.clone(), sec, rx));
     }
     std::fs::write(enabled_path(&app)?, b"1").map_err(|_| "state_write")?;
     crate::ssh_tunnel::restart_with_phase_d(tunnel.inner(), true).await?;

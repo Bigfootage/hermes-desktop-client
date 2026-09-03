@@ -1,14 +1,24 @@
 #!/usr/bin/env python3
 """Hermes stdio adapter for the loopback-only Windows Cua bridge."""
 import hashlib, hmac, json, os, secrets, selectors, socket, sys, time
+import yaml
 PORT=18765
 MAX_BUFFER=1024*1024
-KDF_CONTEXT=b"hermes-desktop/phase-d-bridge/v1"
+CONTEXT=b"hermes-desktop/phase-d-bridge/v1"
 
 def api_key():
     value=os.environ.get("HERMES_API_KEY","").strip()
-    if not value: raise RuntimeError("HERMES_API_KEY is required in the Hermes service environment")
-    return value.encode()
+    if value: return value
+    home=os.environ.get("HERMES_HOME",os.path.expanduser("~/.hermes"))
+    path=os.path.join(home,"config.yaml")
+    with open(path,encoding="utf-8") as stream:
+        value=str((yaml.safe_load(stream) or {}).get("API_SERVER_KEY","")).strip()
+    if not value: raise RuntimeError("Hermes API key is not configured")
+    return value
+
+def bridge_secret():
+    value=api_key().encode()
+    return hmac.new(value,CONTEXT,hashlib.sha256).digest()
 
 def manifest():
     exe=os.environ.get("HERMES_WIN_CUA_ADAPTER","/opt/hermes/bin/win-cua-mcp")
@@ -21,8 +31,7 @@ def handshake(secret:bytes):
     return (json.dumps(fields,separators=(",",":"))+"\n").encode()
 
 def run():
-    key=api_key()
-    secret=hmac.new(key,KDF_CONTEXT,hashlib.sha256).digest()
+    secret=bridge_secret()
     s=socket.create_connection(("127.0.0.1",PORT),timeout=10);s.sendall(handshake(secret))
     response=b""
     while not response.endswith(b"\n") and len(response)<64: response+=s.recv(64-len(response))

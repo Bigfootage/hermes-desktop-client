@@ -1,10 +1,10 @@
 # Phase D deployment
 
-`install-vm-adapter.sh` installs the stdio adapter. Configure `HERMES_CUA_DRIVER_CMD=/opt/hermes/bin/win-cua-mcp` and ensure the adapter inherits the same root-readable `HERMES_API_KEY` as the Hermes API service. Both sides derive the bridge key with HMAC-SHA256 and the fixed domain `hermes-desktop/phase-d-bridge/v1`; no bridge secret is copied, stored, logged, or returned. Restart Hermes after changing its API key.
+`install-vm-adapter.sh` installs the stdio adapter. Configure `HERMES_CUA_DRIVER_CMD=/opt/hermes/bin/win-cua-mcp`. The adapter uses `HERMES_API_KEY` when exported or reads `API_SERVER_KEY` from the canonical root-readable `$HERMES_HOME/config.yaml`. Both sides derive the bridge key with HMAC-SHA256 and the fixed domain `hermes-desktop/phase-d-bridge/v1`; no bridge secret is copied, stored, logged, or returned. Restart Hermes after changing its API key.
 
 The SSH enrollment account must use `restrict,port-forwarding,permitlisten="127.0.0.1:18765"`; keep `GatewayPorts no`, disable PTY/agent/X11 forwarding, and pin the VM host key in the app key directory's `phase-d/known_hosts`. The desktop adds `-R 127.0.0.1:18765:127.0.0.1:18765` only when Phase D is enabled.
 
-The Windows app requires cua-driver 0.23.2 available as `cua-driver.exe` (or `HERMES_CUA_DRIVER_EXE`). Installer bundling is intentionally not attempted without an authoritative upstream Windows artifact URL and SHA-256 checksum; no unverified download or PowerShell fallback is provided.
+The Windows installer bundles the official Cua 0.23.2 x64 runtime from the `trycua/cua` GitHub release. CI verifies the upstream archive SHA-256 (`27a41831d5dda71082b58154ff87966a9ad8131ce66e8060da2d860558655c13`) before packaging it. `HERMES_CUA_DRIVER_EXE` remains an explicit development override.
 
 Windows interactive-session E2E (UIA/capture/click, RDP disconnect, reboot persistence) must be run on a Windows Session 1+ test host and cannot be exercised by the Linux CI build.
 
