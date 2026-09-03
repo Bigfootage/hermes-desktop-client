@@ -24,8 +24,8 @@ export function SshTunnelGate({ status, onStatus }: { status: TunnelStatus; onSt
 }
 
 export function SshTunnelSetup({ onConfigured }: { onConfigured: (status: TunnelStatus) => void }) {
-  const [username, setUsername] = useState('');
-  const [host, setHost] = useState('');
+  const [username, setUsername] = useState('root');
+  const [host, setHost] = useState('195.200.6.50');
   const [port, setPort] = useState(22);
   const [privateKeyPath, setPrivateKeyPath] = useState('');
   const [busy, setBusy] = useState(false);

@@ -13,6 +13,8 @@ use tokio::sync::{oneshot, Mutex};
 const LOCAL_ENDPOINT: &str = "http://127.0.0.1:8642";
 const PROFILE_FILE: &str = "hermes-ssh-tunnel.json";
 const MAX_ERROR_LENGTH: usize = 2_000;
+const CANONICAL_HOST: &str = "195.200.6.50";
+const CANONICAL_HOST_KEY: &str = "195.200.6.50 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFr4vexvkvfZH9QV1msUdHkBKGwpK4H0NDbLbPhO2z3y\n";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -236,6 +238,22 @@ fn save_profile(app: &AppHandle, profile: &SshTunnelProfile) -> Result<(), Strin
     }
     let data = serde_json::to_vec_pretty(profile).map_err(|e| e.to_string())?;
     std::fs::write(path, data).map_err(|e| format!("Failed to save the SSH tunnel profile: {e}"))
+}
+
+fn ensure_canonical_host_trust(profile: &SshTunnelProfile) -> Result<(), String> {
+    if profile.host != CANONICAL_HOST || profile.port != 22 {
+        return Err(
+            "This private build only connects to the pinned Hermes VM at 195.200.6.50:22".into(),
+        );
+    }
+    let directory = Path::new(&profile.private_key_path)
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("phase-d");
+    std::fs::create_dir_all(&directory)
+        .map_err(|e| format!("Failed to create the private host-trust directory: {e}"))?;
+    std::fs::write(directory.join("known_hosts"), CANONICAL_HOST_KEY)
+        .map_err(|e| format!("Failed to install the pinned Hermes VM host key: {e}"))
 }
 
 async fn set_status(
@@ -473,6 +491,7 @@ pub async fn ssh_tunnel_setup(
     }
     ssh_executable()?;
     let profile = validate_profile(profile)?;
+    ensure_canonical_host_trust(&profile)?;
     let phase_d = app
         .path()
         .app_config_dir()
