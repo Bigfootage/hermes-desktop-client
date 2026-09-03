@@ -54,6 +54,60 @@ jobs:
           New-Item -ItemType Directory -Force -Path $destination | Out-Null
           Expand-Archive -Path $zip -DestinationPath $destination -Force
 
+      - name: Exercise bundled Cua runtime on Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $driver = (Get-ChildItem "src-tauri/resources/cua-driver" -Recurse -Filter "cua-driver.exe" | Select-Object -First 1).FullName
+          if (-not $driver) { throw "Bundled cua-driver.exe was not found" }
+          $manifest = & $driver manifest | ConvertFrom-Json
+          if ([version]$manifest.binary_version -lt [version]"0.23.2") { throw "Unexpected Cua runtime version" }
+
+          $capabilities = Join-Path $env:RUNNER_TEMP "phase-d-capabilities.yaml"
+          @"
+          version: 3
+          expires_after: 15m
+          idle_timeout: 5m
+          allow:
+            tools:
+              - health_report
+              - get_screen_size
+              - list_apps
+              - list_windows
+              - get_accessibility_tree
+              - get_desktop_state
+              - click
+              - type_text
+              - press_key
+          resources:
+            apps: []
+            desktop:
+              display: true
+          "@ | Set-Content -Encoding utf8NoBOM $capabilities
+
+          $socket = "\\.\pipe\hermes-phase-d-ci-$env:GITHUB_RUN_ID"
+          $daemon = Start-Process -FilePath $driver -ArgumentList @(
+            "serve", "--permission-mode", "bounded",
+            "--capability-manifest", $capabilities,
+            "--approve-capability-manifest", "--socket", $socket
+          ) -WindowStyle Hidden -PassThru
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 40; $i++) {
+              & $driver status --socket $socket *> $null
+              if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+              Start-Sleep -Milliseconds 250
+            }
+            if (-not $ready) { throw "Cua daemon did not become ready" }
+            $health = & $driver call health_report '{}' --socket $socket
+            if ($LASTEXITCODE -ne 0 -or -not $health) { throw "Cua health_report failed" }
+            $screen = & $driver call get_screen_size '{}' --socket $socket
+            if ($LASTEXITCODE -ne 0 -or -not $screen) { throw "Cua display observation failed" }
+          } finally {
+            & $driver stop --socket $socket *> $null
+            if (-not $daemon.HasExited) { Stop-Process -Id $daemon.Id -Force }
+          }
+
       - name: Build NSIS and MSI installers
         run: npm run tauri build -- --bundles nsis,msi --config '{"bundle":{"resources":{"resources/cua-driver/*":"cua-driver/"}}}'
 
