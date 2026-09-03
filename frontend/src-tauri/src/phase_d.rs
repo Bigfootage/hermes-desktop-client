@@ -231,6 +231,14 @@ fn cua_exe() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("cua-driver.exe"))
 }
 
+fn hidden_cua_command() -> Command {
+    #[allow(unused_mut)]
+    let mut command = Command::new(cua_exe());
+    #[cfg(target_os = "windows")]
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    command
+}
+
 /// Prefer the release-pinned driver bundled by Windows CI. The environment
 /// override remains available for development and emergency replacement.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -271,7 +279,7 @@ async fn proxy_connection(
         manager.status.last_heartbeat_ms = Some(now_ms());
         manager.status.state = PhaseDState::Ready;
     }
-    let mut child = Command::new(cua_exe())
+    let mut child = hidden_cua_command()
         .args(["mcp", "--socket", CUA_PIPE])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -311,7 +319,7 @@ async fn run_proxy(
 
 async fn wait_for_cua() -> bool {
     for _ in 0..20 {
-        if Command::new(cua_exe())
+        if hidden_cua_command()
             .args(["status", "--socket", CUA_PIPE])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -327,11 +335,11 @@ async fn wait_for_cua() -> bool {
     false
 }
 async fn kill_cua(manager: &mut PhaseDManager) {
-    let _ = Command::new(cua_exe())
+    let _ = hidden_cua_command()
         .args(["revoke", "--all", "--socket", CUA_PIPE])
         .output()
         .await;
-    let _ = Command::new(cua_exe())
+    let _ = hidden_cua_command()
         .args(["stop", "--socket", CUA_PIPE])
         .output()
         .await;
@@ -377,7 +385,7 @@ pub async fn phase_d_enable(
         m.status.enabled = true;
         m.status.state = PhaseDState::StartingCua;
         m.status.session_id = Some(sid);
-        let child = Command::new(cua_exe())
+        let child = hidden_cua_command()
             .args([
                 "serve",
                 "--permission-mode",
@@ -448,7 +456,7 @@ pub async fn phase_d_rotate_credentials() -> Result<(), String> {
 }
 #[tauri::command]
 pub async fn phase_d_test() -> Result<String, String> {
-    let out = Command::new(cua_exe())
+    let out = hidden_cua_command()
         .args(["doctor", "--json"])
         .output()
         .await
