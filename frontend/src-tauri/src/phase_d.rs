@@ -56,7 +56,7 @@ allow:
 resources:
   apps: []
   desktop:
-    display: false
+    display: true
 "#;
 
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
@@ -534,6 +534,8 @@ mod tests {
     fn manifest_is_bounded() {
         assert!(MANIFEST.contains("version: 3"));
         assert!(MANIFEST.contains("expires_after: 24h"));
+        assert!(MANIFEST.contains("display: true"));
+        assert!(!MANIFEST.contains("display: false"));
         assert!(!MANIFEST.contains("launch_app"));
         assert!(!MANIFEST.contains("clipboard"));
     }

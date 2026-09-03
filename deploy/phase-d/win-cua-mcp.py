@@ -22,7 +22,16 @@ def bridge_secret():
 
 def manifest():
     exe=os.environ.get("HERMES_WIN_CUA_ADAPTER","/opt/hermes/bin/win-cua-mcp")
-    print(json.dumps({"schema_version":"1","mcp_invocation":{"command":exe,"args":["mcp"]}}))
+    print(json.dumps({
+        "schema_version":"1",
+        "binary_version":"0.23.2",
+        "mcp_invocation":{"command":exe,"args":["mcp"]},
+        "subcommands":[
+            {"name":"mcp","args":[{"name":"--socket"},{"name":"--grant"}]},
+            {"name":"serve","args":[{"name":"--socket"},{"name":"--permission-mode"},{"name":"--capability-manifest"},{"name":"--approve-capability-manifest"},{"name":"--embedded"}]},
+            {"name":"stop","args":[{"name":"--socket"}]}
+        ]
+    }))
 
 def handshake(secret:bytes):
     fields={"version":1,"device_id":os.environ.get("HERMES_PHASE_D_DEVICE_ID","windows"),"timestamp":int(time.time()*1000),"nonce":secrets.token_hex(24),"adapter_pid":os.getpid()}
