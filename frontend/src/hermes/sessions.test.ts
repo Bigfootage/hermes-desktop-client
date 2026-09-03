@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { HermesClient } from './client';
-import { createSession, deleteSession, forkSession, getSessionMessages, listSessions, patchSession, streamSessionChat } from './sessions';
+import { createSession, deleteSession, forkSession, getSessionMessages, listAllSessions, listSessions, patchSession, streamSessionChat } from './sessions';
 
 function response(body: unknown, status = 200, headers?: HeadersInit) {
   return new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
@@ -16,6 +16,18 @@ describe('canonical sessions API', () => {
     const result = await listSessions(clientWith(fetcher), { limit: 20, offset: 0, includeChildren: true });
     expect(result.data[0]).toMatchObject({ id: 's1', title: 'First', pinned: false });
     expect(fetcher).toHaveBeenCalledWith('https://hermes.example/api/sessions?limit=20&offset=0&include_children=true', expect.objectContaining({ headers: expect.any(Headers) }));
+  });
+
+  it('paginates the complete cross-channel session catalogue', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(response({ data: [{ id: 'new' }, { id: 'pinned', pinned: true }], limit: 100, offset: 0, has_more: true }))
+      .mockResolvedValueOnce(response({ data: [{ id: 'old' }, { id: 'pinned', pinned: true }], limit: 100, offset: 100, has_more: false }));
+    const result = await listAllSessions(clientWith(fetcher as unknown as typeof fetch));
+    expect(result.map((session) => session.id)).toEqual(['new', 'pinned', 'old']);
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      'https://hermes.example/api/sessions?limit=100&offset=0&include_children=true',
+      'https://hermes.example/api/sessions?limit=100&offset=100&include_children=true',
+    ]);
   });
 
   it('creates, renames, forks and deletes through exact routes', async () => {

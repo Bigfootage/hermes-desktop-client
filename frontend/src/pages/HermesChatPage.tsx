@@ -1,15 +1,18 @@
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Bot, Cable, CircleAlert, Copy, Eye, EyeOff, HelpCircle, Key, Menu, MessageSquarePlus, PanelLeftClose, Pencil, Send, Square, Trash2, Unplug, User } from 'lucide-react';
+import { Activity, Bot, Cable, CircleAlert, Copy, Eye, EyeOff, HelpCircle, Key, Menu, MessageSquarePlus, PanelLeftClose, Pencil, Search, Send, ShieldCheck, Square, Trash2, Unplug, User } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { ResponseActivityTimeline } from '../components/Chat/ResponseActivityTimeline';
 import { ConnectionStatus, VoiceCapture } from '../components/Chat/ConnectionStatus';
 import { SshTunnelGate, SshTunnelSetup } from '../components/SshTunnelSetup';
 import { RunsPanel } from '../components/Chat/RunsPanel';
+import { IntelligenceStatus } from '../components/Desktop/IntelligenceStatus';
 import { createResponseActivity, type ResponseActivity } from '../hermes/activity';
 import { clearConnection, isTauriRuntime, loadConnection, saveConnection, validateConnection } from '../hermes/auth';
 import { HermesClient } from '../hermes/client';
 import { supportsResponses } from '../hermes/capabilities';
-import { createSession, deleteSession, forkSession, getSessionMessages, listSessions, patchSession, streamSessionChat, type HermesSession, type SessionStreamEvent } from '../hermes/sessions';
+import { fetchEffectiveIntelligence, type EffectiveIntelligence } from '../hermes/intelligence';
+import { discoverRelatedSessions, filterSessions } from '../hermes/session-discovery';
+import { createSession, deleteSession, forkSession, getSessionMessages, listAllSessions, patchSession, streamSessionChat, type HermesSession, type SessionStreamEvent } from '../hermes/sessions';
 import type { HermesCapabilities, HermesConnectionProfile, HermesClarifyRequest } from '../hermes/types';
 import { getTunnelStatus, shouldShowTunnelSetup, type TunnelStatus } from '../hermes/ssh-tunnel';
 
@@ -46,6 +49,8 @@ export function HermesChatPage() {
   const [key, setKey] = useState('');
 
   const [capabilities, setCapabilities] = useState<HermesCapabilities | null>(null);
+  const [intelligence, setIntelligence] = useState<EffectiveIntelligence | null>(null);
+  const [intelligenceOpen, setIntelligenceOpen] = useState(false);
   const [connectionState, setConnectionState] = useState<ConnectionState>('checking');
   const [error, setError] = useState('');
   const [connecting, setConnecting] = useState(false);
@@ -57,6 +62,7 @@ export function HermesChatPage() {
   const [sessions, setSessions] = useState<HermesSession[]>([]);
   const [activeSession, setActiveSession] = useState<HermesSession | null>(null);
   const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionQuery, setSessionQuery] = useState('');
   const [pendingClarify, setPendingClarify] = useState<HermesClarifyRequest | null>(null);
   const [secretValue, setSecretValue] = useState('');
   const [secretVisible, setSecretVisible] = useState(false);
@@ -64,6 +70,8 @@ export function HermesChatPage() {
   const abort = useRef<AbortController | undefined>(undefined);
   const endRef = useRef<HTMLDivElement | null>(null);
   const client = useMemo(() => profile ? new HermesClient(profile) : null, [profile]);
+  const visibleSessions = useMemo(() => filterSessions(sessions, sessionQuery), [sessions, sessionQuery]);
+  const relatedSessions = useMemo(() => activeSession ? discoverRelatedSessions(sessions, activeSession) : [], [sessions, activeSession]);
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
@@ -102,7 +110,10 @@ export function HermesChatPage() {
     Promise.all([client.health(), client.fetchCapabilities()])
       .then(([, caps]) => {
         if (!supportsResponses(caps)) throw new Error('This Hermes server does not advertise the Responses API required by this client');
-        if (active) { setCapabilities(caps); setConnectionState('connected'); setError(''); void refreshSessions(); }
+        if (active) {
+          setCapabilities(caps); setConnectionState('connected'); setError(''); void refreshSessions();
+          void fetchEffectiveIntelligence(client, caps).then((value) => { if (active) setIntelligence(value); }).catch(() => { if (active) setIntelligence(null); });
+        }
       })
       .catch((err) => {
         if (active) { setConnectionState('error'); setError(err instanceof Error ? err.message : String(err)); }
@@ -114,9 +125,9 @@ export function HermesChatPage() {
     if (!client) return;
     setSessionsLoading(true);
     try {
-      const result = await listSessions(client, { limit: 100, includeChildren: true });
-      setSessions(result.data);
-      if (selectId) setActiveSession(result.data.find((session) => session.id === selectId) ?? null);
+      const result = await listAllSessions(client, true);
+      setSessions(result);
+      if (selectId) setActiveSession(result.find((session) => session.id === selectId) ?? null);
     } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
     finally { setSessionsLoading(false); }
   }
@@ -183,6 +194,7 @@ export function HermesChatPage() {
       if (!supportsResponses(caps)) throw new Error('This Hermes server does not advertise the Responses API required by this client');
       setKey('');
       setProfile(saved); setCapabilities(caps); setConnectionState('connected');
+      void fetchEffectiveIntelligence(new HermesClient(saved), caps).then(setIntelligence).catch(() => setIntelligence(null));
     } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
     finally { setConnecting(false); }
   }
@@ -228,7 +240,7 @@ export function HermesChatPage() {
     if (streaming) abort.current?.abort();
     try { await clearConnection(); } catch { /* credential storage best-effort */ }
 
-    setProfile(null); setCapabilities(null); setMessages([]); setSessions([]); setActiveSession(null); previousId.current = undefined;
+    setProfile(null); setCapabilities(null); setIntelligence(null); setMessages([]); setSessions([]); setActiveSession(null); previousId.current = undefined;
   }
 
   function onComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -263,9 +275,11 @@ export function HermesChatPage() {
             <button className="rounded-lg p-2 cursor-pointer hover:bg-black/5" onClick={() => setSidebarOpen(false)} aria-label="Collapse sidebar"><PanelLeftClose size={17} /></button>
           </div>
           <button onClick={() => void createConversation()} className="mb-3 flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium cursor-pointer" style={{ background: 'var(--color-accent)', color: 'var(--color-on-accent)' }}><MessageSquarePlus size={16} />New conversation</button>
+          <label className="relative mb-2 block"><Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--color-text-tertiary)' }} /><input aria-label="Search sessions" value={sessionQuery} onChange={(event) => setSessionQuery(event.target.value)} placeholder="Find across channels" className="w-full rounded-lg border bg-transparent py-1.5 pl-7 pr-2 text-[11px] outline-none" style={{ borderColor: 'var(--color-border)' }} /></label>
           <nav aria-label="Hermes sessions" className="min-h-0 flex-1 space-y-1 overflow-y-auto">
             <div className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--color-text-tertiary)' }}>{sessionsLoading ? 'Loading sessions…' : 'Sessions'}</div>
-            {sessions.map((session) => <div key={session.id} className="group flex items-center rounded-lg" style={{ background: activeSession?.id === session.id ? 'var(--color-accent-subtle)' : undefined }}><button onClick={() => void resumeSession(session)} className="min-w-0 flex-1 truncate px-2 py-2 text-left text-xs cursor-pointer" title={session.title || session.preview || session.id}>{session.title || session.preview || 'Untitled conversation'}</button><div className="hidden shrink-0 items-center pr-1 group-hover:flex"><button aria-label="Rename session" title="Rename" onClick={() => void renameConversation(session)} className="p-1 cursor-pointer"><Pencil size={12} /></button><button aria-label="Fork session" title="Fork" onClick={() => void forkConversation(session)} className="p-1 cursor-pointer"><Copy size={12} /></button><button aria-label="Delete session" title="Delete" onClick={() => void removeConversation(session)} className="p-1 cursor-pointer" style={{ color: 'var(--color-error)' }}><Trash2 size={12} /></button></div></div>)}
+            {visibleSessions.map((session) => <div key={session.id} className="group flex items-center rounded-lg" style={{ background: activeSession?.id === session.id ? 'var(--color-accent-subtle)' : undefined }}><button onClick={() => void resumeSession(session)} className="min-w-0 flex-1 truncate px-2 py-2 text-left text-xs cursor-pointer" title={session.title || session.preview || session.id}>{session.title || session.preview || 'Untitled conversation'}{session.source && <span className="ml-1 text-[9px]" style={{ color: 'var(--color-text-tertiary)' }}>· {session.source}</span>}</button><div className="hidden shrink-0 items-center pr-1 group-hover:flex"><button aria-label="Rename session" title="Rename" onClick={() => void renameConversation(session)} className="p-1 cursor-pointer"><Pencil size={12} /></button><button aria-label="Fork session" title="Fork" onClick={() => void forkConversation(session)} className="p-1 cursor-pointer"><Copy size={12} /></button><button aria-label="Delete session" title="Delete" onClick={() => void removeConversation(session)} className="p-1 cursor-pointer" style={{ color: 'var(--color-error)' }}><Trash2 size={12} /></button></div></div>)}
+            {activeSession && relatedSessions.length > 0 && !sessionQuery && <div className="mt-3 border-t pt-2" style={{ borderColor: 'var(--color-border)' }}><div className="px-2 pb-1 text-[9px] font-medium uppercase tracking-wider" style={{ color: 'var(--color-text-tertiary)' }}>Related context</div>{relatedSessions.map((session) => <button key={`related-${session.id}`} onClick={() => void resumeSession(session)} className="block w-full truncate rounded-lg px-2 py-1.5 text-left text-[10px] cursor-pointer" title="Open this session without merging transcripts">{session.title || session.preview || 'Untitled'} <span style={{ color: 'var(--color-text-tertiary)' }}>· {session.source || 'unknown channel'}</span></button>)}</div>}
           </nav>
           <div className="mt-auto rounded-xl border p-3" style={{ borderColor: 'var(--color-border)', background: 'var(--color-bg-secondary)' }}>
             <ConnectionStatus />
@@ -277,7 +291,8 @@ export function HermesChatPage() {
         <header className="flex h-14 shrink-0 items-center gap-3 border-b px-4" style={{ borderColor: 'var(--color-border)', background: 'color-mix(in srgb, var(--color-bg) 85%, transparent)', backdropFilter: 'blur(16px)' }}>
           {!sidebarOpen && <button className="rounded-lg p-2 cursor-pointer" onClick={() => setSidebarOpen(true)} aria-label="Open sidebar"><Menu size={18} /></button>}
           <div className="min-w-0"><h1 className="truncate text-sm font-semibold">{activeSession?.title || 'Hermes conversation'}</h1><p className="text-[11px]" style={{ color: 'var(--color-text-tertiary)' }}>{statusLabel}</p></div>
-          <button onClick={() => setRunsOpen((open) => !open)} className="ml-auto flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs cursor-pointer" style={{ color: runsOpen ? 'var(--color-accent)' : 'var(--color-text-secondary)', background: runsOpen ? 'var(--color-accent-subtle)' : 'var(--color-bg-secondary)' }} aria-expanded={runsOpen}><Activity size={13} />Long task</button>
+          <div className="relative ml-auto"><button onClick={() => setIntelligenceOpen((open) => !open)} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs cursor-pointer" style={{ color: intelligenceOpen ? 'var(--color-accent)' : 'var(--color-text-secondary)', background: intelligenceOpen ? 'var(--color-accent-subtle)' : 'var(--color-bg-secondary)' }} aria-expanded={intelligenceOpen} aria-controls="intelligence-status"><ShieldCheck size={13} />Intelligence</button>{intelligenceOpen && <div id="intelligence-status" className="absolute right-0 top-10 z-30"><IntelligenceStatus intelligence={intelligence} /></div>}</div>
+          <button onClick={() => setRunsOpen((open) => !open)} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs cursor-pointer" style={{ color: runsOpen ? 'var(--color-accent)' : 'var(--color-text-secondary)', background: runsOpen ? 'var(--color-accent-subtle)' : 'var(--color-bg-secondary)' }} aria-expanded={runsOpen}><Activity size={13} />Long task</button>
         </header>
 
         <div className="flex-1 overflow-y-auto px-4">

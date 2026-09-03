@@ -57,6 +57,19 @@ export async function listSessions(client: HermesClient, options: { limit?: numb
   return { data: body.data.map(normalizeSession), limit: body.limit, offset: body.offset, hasMore: body.has_more };
 }
 
+export async function listAllSessions(client: HermesClient, includeChildren = true): Promise<HermesSession[]> {
+  const pageSize = 100;
+  const byId = new Map<string, HermesSession>();
+  let offset = 0;
+  for (let page = 0; page < 100; page += 1) {
+    const result = await listSessions(client, { limit: pageSize, offset, includeChildren });
+    result.data.forEach((session) => byId.set(session.id, session));
+    if (!result.hasMore || result.data.length === 0) return [...byId.values()];
+    offset = result.offset + result.limit;
+  }
+  throw new Error('Session catalogue exceeded the safe pagination limit');
+}
+
 export async function createSession(client: HermesClient, input: { title?: string; source?: string } = {}): Promise<HermesSession> {
   return sessionFrom(await client.request(`/api/sessions`, { method: 'POST', body: JSON.stringify({ source: 'desktop', ...input }) }));
 }
