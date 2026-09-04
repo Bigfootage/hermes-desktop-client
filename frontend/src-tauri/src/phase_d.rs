@@ -24,7 +24,7 @@ const MAX_HANDSHAKE: usize = 4096;
 const CLOCK_SKEW_MS: i64 = 30_000;
 const MANIFEST: &str = r#"version: 3
 expires_after: 24h
-idle_timeout: 30m
+idle_timeout: 720h
 allow:
   tools:
     - start_session
@@ -348,6 +348,18 @@ async fn kill_cua(manager: &mut PhaseDManager) {
         let _ = child.kill().await;
     }
     manager.cua = None;
+    // Force-kill any surviving cua-driver.exe processes so the next
+    // `serve` can bind the named pipe.  The graceful stop above is
+    // preferred; this is a last-resort cleanup for hung daemons.
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/IM", "cua-driver.exe"])
+            .creation_flags(0x08000000)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
 }
 
 #[tauri::command]
@@ -534,7 +546,7 @@ mod tests {
     #[test]
     fn manifest_is_bounded() {
         assert!(MANIFEST.contains("version: 3"));
-        assert!(MANIFEST.contains("expires_after: 24h"));
+        assert!(MANIFEST.contains("idle_timeout: 720h"));
         assert!(MANIFEST.contains("display: true"));
         assert!(!MANIFEST.contains("display: false"));
         assert!(!MANIFEST.contains("launch_app"));
