@@ -553,5 +553,14 @@ mod tests {
         assert!(!MANIFEST.contains("clipboard"));
         assert!(MANIFEST.contains("apps:"));
         assert!(MANIFEST.contains("- \"*\""));
+        assert!(MANIFEST.contains("idle_timeout: 720h"));
+    }
+
+    #[test]
+    fn installer_stops_locked_phase_d_processes() {
+        let hooks = include_str!("../windows/installer-hooks.nsh");
+        assert!(hooks.contains("NSIS_HOOK_PREINSTALL"));
+        assert!(hooks.contains("taskkill /F /IM openjarvis-desktop.exe"));
+        assert!(hooks.contains("taskkill /F /IM cua-driver.exe"));
     }
 }
