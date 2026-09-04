@@ -54,7 +54,8 @@ allow:
     - get_agent_cursor_state
     - set_agent_cursor_enabled
 resources:
-  apps: []
+  apps:
+    - "*"
   desktop:
     display: true
 "#;
@@ -538,5 +539,7 @@ mod tests {
         assert!(!MANIFEST.contains("display: false"));
         assert!(!MANIFEST.contains("launch_app"));
         assert!(!MANIFEST.contains("clipboard"));
+        assert!(MANIFEST.contains("apps:"));
+        assert!(MANIFEST.contains("- \"*\""));
     }
 }
