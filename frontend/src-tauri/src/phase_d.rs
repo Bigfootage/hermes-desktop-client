@@ -355,7 +355,6 @@ async fn kill_cua(manager: &mut PhaseDManager) {
     {
         let _ = std::process::Command::new("taskkill")
             .args(["/F", "/IM", "cua-driver.exe"])
-            .creation_flags(0x08000000)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
