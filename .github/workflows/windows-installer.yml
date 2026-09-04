@@ -13,10 +13,7 @@ permissions:
 
 jobs:
   build-windows:
-    # Runs on Lucas's own interactive Windows machine. This avoids GitHub
-    # Actions minute charges and exercises the exact desktop/session used in
-    # production rather than a disposable hosted VM.
-    runs-on: [self-hosted, Windows, X64, hermes-phase-d]
+    runs-on: windows-latest
     defaults:
       run:
         working-directory: frontend
