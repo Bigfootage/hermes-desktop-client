@@ -353,17 +353,25 @@ async fn run_proxy(
 }
 
 async fn wait_for_cua() -> bool {
-    for _ in 0..20 {
-        if hidden_cua_command()
+    // Windows UIA + named pipe initialization takes 6-10s in practice.
+    // Allow 15s (60 * 250ms) with output capture so failures are visible.
+    for _ in 0..60 {
+        let output = hidden_cua_command()
             .args(["status", "--socket", CUA_PIPE])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await
-            .map(|status| status.success())
-            .unwrap_or(false)
-        {
-            return true;
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .await;
+        match output {
+            Ok(out) if out.status.success() => return true,
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if !stderr.trim().is_empty() || !stdout.trim().is_empty() {
+                    eprintln!("[cua status] stdout: {} stderr: {}", stdout.trim(), stderr.trim());
+                }
+            }
+            Err(_) => {}
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
