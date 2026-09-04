@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Hermes Desktop Client",
-  "version": "1.3.4",
+  "version": "1.3.5",
   "identifier": "research.nous.hermesdesktop.v2",
   "build": {
     "frontendDist": "../dist",
@@ -38,9 +38,9 @@
       "resources/cua-driver/*"
     ],
     "windows": {
-      "nsis": {
-        "installerHooks": "./windows/installer-hooks.nsh"
-      }
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com"
     },
     "icon": [
       "icons/32x32.png",
@@ -59,11 +59,6 @@
       "frameworks": [],
       "providerShortName": null,
       "signingIdentity": "-"
-    },
-    "windows": {
-      "certificateThumbprint": null,
-      "digestAlgorithm": "sha256",
-      "timestampUrl": "http://timestamp.digicert.com"
     }
   },
   "plugins": {
