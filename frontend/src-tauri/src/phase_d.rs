@@ -227,9 +227,43 @@ fn session_id() -> Result<u32, String> {
     Err("windows_only".into())
 }
 fn cua_exe() -> PathBuf {
-    std::env::var_os("HERMES_CUA_DRIVER_EXE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("cua-driver.exe"))
+    if let Some(exe) = std::env::var_os("HERMES_CUA_DRIVER_EXE") {
+        let p = PathBuf::from(exe);
+        if p.is_file() {
+            return p;
+        }
+    }
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            let candidates = [
+                parent.join("cua-driver.exe"),
+                parent.join("cua-driver").join("cua-driver.exe"),
+                parent.join("resources").join("cua-driver").join("cua-driver.exe"),
+            ];
+            for c in candidates {
+                if c.is_file() {
+                    return c;
+                }
+            }
+        }
+    }
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        let candidates = [
+            PathBuf::from(&local_app_data)
+                .join("Hermes Desktop Client")
+                .join("cua-driver")
+                .join("cua-driver.exe"),
+            PathBuf::from(&local_app_data)
+                .join("Hermes Desktop Client")
+                .join("cua-driver.exe"),
+        ];
+        for c in candidates {
+            if c.is_file() {
+                return c;
+            }
+        }
+    }
+    PathBuf::from("cua-driver.exe")
 }
 
 fn hidden_cua_command() -> Command {
