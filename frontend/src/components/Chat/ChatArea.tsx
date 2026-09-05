@@ -4,8 +4,9 @@ import { MessageBubble } from './MessageBubble';
 import { InputArea } from './InputArea';
 import { StreamingDots } from './StreamingDots';
 import { useAppStore } from '../../lib/store';
-import { Sparkles, PanelRightOpen, PanelRightClose, Database, MessageSquare, X } from 'lucide-react';
+import { Sparkles, PanelRightOpen, PanelRightClose, Database, MessageSquare, X, Volume2, VolumeX } from 'lucide-react';
 import { listConnectors } from '../../lib/connectors-api';
+import { useVoice } from '../../hooks/useVoice';
 
 function getGreeting(): string {
   const hour = new Date().getHours();
@@ -27,6 +28,32 @@ export function ChatArea() {
   const lastScrollTop = useRef(0);
   const isCurrentChatStreaming = streamState.isStreaming && streamState.conversationId === activeId;
   const currentStreamContent = isCurrentChatStreaming ? streamState.content : '';
+
+  // Voice
+  const { speak, stop } = useVoice();
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const prevAssistantContent = useRef('');
+  const wasStreamingVoice = useRef(false);
+
+  // Auto-speak assistant responses when voice is enabled
+  useEffect(() => {
+    if (!voiceEnabled) return;
+    if (!isCurrentChatStreaming && wasStreamingVoice.current) {
+      // Stream just finished — speak only new content
+      wasStreamingVoice.current = false;
+      const newContent = currentStreamContent.replace(prevAssistantContent.current, '').trim();
+      if (newContent.length > 5) {
+        speak(newContent);
+      }
+    }
+    if (isCurrentChatStreaming && !wasStreamingVoice.current) {
+      wasStreamingVoice.current = true;
+      prevAssistantContent.current = '';
+    }
+    if (isCurrentChatStreaming) {
+      prevAssistantContent.current = currentStreamContent;
+    }
+  }, [currentStreamContent, isCurrentChatStreaming, voiceEnabled, speak]);
 
   // Check if any data sources are connected
   const [hasConnectedSources, setHasConnectedSources] = useState<boolean | null>(null);
@@ -76,7 +103,15 @@ export function ChatArea() {
   return (
     <div className="flex flex-col h-full">
       {/* Toggle bar */}
-      <div className="flex items-center justify-end px-3 py-1.5 shrink-0">
+      <div className="flex items-center justify-end px-3 py-1.5 shrink-0 gap-1">
+        <button
+          onClick={() => { setVoiceEnabled(v => !v); if (voiceEnabled) stop(); }}
+          className="p-1.5 rounded-md transition-colors cursor-pointer"
+          style={{ color: voiceEnabled ? 'var(--color-accent)' : 'var(--color-text-tertiary)' }}
+          title={voiceEnabled ? 'Voice replies on — click to mute' : 'Voice replies off — click to enable'}
+        >
+          {voiceEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+        </button>
         <button
           onClick={toggleSystemPanel}
           className="p-1.5 rounded-md transition-colors cursor-pointer"

@@ -2889,6 +2889,7 @@ pub fn run() {
             hermes_transport::hermes_transcribe_audio,
             hermes_transport::hermes_stream,
             hermes_transport::hermes_cancel_stream,
+            hermes_transport::hermes_speak,
             ssh_tunnel::ssh_tunnel_status,
             ssh_tunnel::ssh_tunnel_setup,
             ssh_tunnel::ssh_tunnel_disconnect,

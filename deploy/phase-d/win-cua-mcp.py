@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Hermes stdio adapter for the loopback-only Windows Cua bridge."""
-import hashlib, hmac, json, os, secrets, selectors, socket, sys, time
+import hashlib, hmac, json, os, secrets, socket, sys, threading, time
 import yaml
 PORT=18765
-MAX_BUFFER=1024*1024
 CONTEXT=b"hermes-desktop/phase-d-bridge/v1"
 
 def api_key():
@@ -39,23 +38,46 @@ def handshake(secret:bytes):
     fields["mac"]=hmac.new(secret,canonical.encode(),hashlib.sha256).hexdigest()
     return (json.dumps(fields,separators=(",",":"))+"\n").encode()
 
+def copy_stream(src, dst, name):
+    """Copy data from src to dst, blocking I/O."""
+    try:
+        while True:
+            data = src.recv(65536) if hasattr(src, 'recv') else os.read(src.fileno(), 65536)
+            if not data:
+                break
+            if hasattr(dst, 'sendall'):
+                dst.sendall(data)
+            else:
+                os.write(dst.fileno(), data)
+    except (BrokenPipeError, ConnectionResetError, OSError):
+        pass
+
 def run():
     secret=bridge_secret()
-    s=socket.create_connection(("127.0.0.1",PORT),timeout=10);s.sendall(handshake(secret))
+    s=socket.create_connection(("127.0.0.1",PORT),timeout=10)
+    s.sendall(handshake(secret))
     response=b""
-    while not response.endswith(b"\n") and len(response)<64: response+=s.recv(64-len(response))
-    if response!=b"OK\n": raise RuntimeError("bridge authentication failed")
-    s.setblocking(False);sel=selectors.DefaultSelector();sel.register(s,selectors.EVENT_READ,"socket");sel.register(sys.stdin.buffer,selectors.EVENT_READ,"stdin")
-    while True:
-        for key,_ in sel.select(timeout=60):
-            if key.data=="stdin":
-                data=os.read(sys.stdin.fileno(),65536)
-                if not data: s.shutdown(socket.SHUT_WR);sel.unregister(sys.stdin.buffer)
-                else: s.sendall(data)
-            else:
-                data=s.recv(65536)
-                if not data:return
-                os.write(sys.stdout.fileno(),data)
+    while not response.endswith(b"\n") and len(response)<64:
+        chunk = s.recv(64-len(response))
+        if not chunk:
+            raise RuntimeError("bridge closed during handshake")
+        response += chunk
+    if response!=b"OK\n":
+        raise RuntimeError(f"bridge authentication failed: {response!r}")
+
+    # Bidirectional copy using threads (simple, reliable with blocking I/O)
+    t1 = threading.Thread(target=copy_stream, args=(sys.stdin.buffer, s, "stdin->socket"), daemon=True)
+    t2 = threading.Thread(target=copy_stream, args=(s, sys.stdout.buffer, "socket->stdout"), daemon=True)
+    t1.start()
+    t2.start()
+    t1.join()
+    # When stdin closes, shutdown the write side and wait for socket to drain
+    try:
+        s.shutdown(socket.SHUT_WR)
+    except OSError:
+        pass
+    t2.join(timeout=5)
+    s.close()
 
 if __name__=="__main__":
     if len(sys.argv)>1 and sys.argv[1]=="manifest":manifest()

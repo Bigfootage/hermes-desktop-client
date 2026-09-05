@@ -454,6 +454,28 @@ pub async fn hermes_cancel_stream(stream_id: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub async fn hermes_speak(text: String) -> Result<Vec<u8>, String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://api.elevenlabs.io/v1/text-to-speech/DlUw8cwIEum3mfkEPOBx")
+        .header("xi-api-key", "287e7f01cf50e7694f4979132fc88f55b23c39ba4b4e8a4d9cceff43a4d2d603")
+        .header("Content-Type", "application/json")
+        .header("Accept", "audio/mpeg")
+        .json(&serde_json::json!({
+            "text": text,
+            "model_id": "eleven_multilingual_v2",
+            "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("ElevenLabs request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("ElevenLabs HTTP {}", resp.status().as_u16()));
+    }
+    Ok(resp.bytes().await.map_err(|e| format!("ElevenLabs read failed: {e}"))?.to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
