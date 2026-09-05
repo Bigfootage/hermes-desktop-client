@@ -24,7 +24,7 @@ const MAX_HANDSHAKE: usize = 4096;
 const CLOCK_SKEW_MS: i64 = 30_000;
 const MANIFEST: &str = r#"version: 3
 expires_after: 24h
-idle_timeout: 720h
+idle_timeout: 24h
 allow:
   tools:
     - start_session
@@ -54,8 +54,7 @@ allow:
     - get_agent_cursor_state
     - set_agent_cursor_enabled
 resources:
-  apps:
-    - "*"
+  apps: []
   desktop:
     display: true
 "#;
@@ -587,14 +586,14 @@ mod tests {
     #[test]
     fn manifest_is_bounded() {
         assert!(MANIFEST.contains("version: 3"));
-        assert!(MANIFEST.contains("idle_timeout: 720h"));
+        assert!(MANIFEST.contains("idle_timeout: 24h"));
         assert!(MANIFEST.contains("display: true"));
         assert!(!MANIFEST.contains("display: false"));
         assert!(!MANIFEST.contains("launch_app"));
         assert!(!MANIFEST.contains("clipboard"));
         assert!(MANIFEST.contains("apps:"));
-        assert!(MANIFEST.contains("- \"*\""));
-        assert!(MANIFEST.contains("idle_timeout: 720h"));
+        assert!(MANIFEST.contains("apps: []"));
+        assert!(MANIFEST.contains("idle_timeout: 24h"));
     }
 
     #[test]
